@@ -105,8 +105,11 @@ def main():
         results.append(rewards)
 
     print('Evaluate %d episodes and achieved %f scores' % (args.num_episodes, np.mean(results)))
-    file_name = "%s_%d_%s" % (args.env, args.num_episodes, args.model_path)
-    torch.save(results, os.path.join(args.save_path, file_name))
+    #file_name = "%s_%d_%s" % (args.env, args.num_episodes, 'results.txt')
+    print(results)
+    #torch.save(results, os.path.join(args.save_path, file_name))
+    with open(os.path.join(args.save_path, 'file.py'), 'w') as f:
+       f.write('score = %s' % results)
 
 if __name__ == '__main__':
     main()
