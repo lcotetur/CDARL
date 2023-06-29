@@ -54,9 +54,9 @@ class Env():
         self.reward_threshold = self.env.spec.reward_threshold
 
     def process_obs(self, obs): # a single frame (96, 96, 3) for CarRacing
+        obs = np.ascontiguousarray(obs, dtype=np.float32)
         obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
-        #return np.transpose(obs, (2,0,1))
-        return obs
+        return np.transpose(obs, (2,0,1))
 
     def reset(self):
         self.counter = 0
@@ -229,7 +229,7 @@ class CycleVAE():
         return mu + eps*std
 
     def forward_loss(self, x, beta):
-        mu, logsigma, classcode = self.self.model.encoder(x)
+        mu, logsigma, classcode = self.model.encoder(x)
         contentcode = self.reparameterize(mu, logsigma)
         shuffled_classcode = classcode[torch.randperm(classcode.shape[0])]
 
@@ -266,8 +266,8 @@ class CycleVAE():
     
     def update(self, s, s_, index, training_step, results_vae):
         imgs = RandomTransform(s[index]).apply_transformations()
-        imgs2 = s_[torch.randperm(index.shape[0])]
-        save_image(imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/imgs.png")
+        print(imgs.shape)
+        imgs2 = s_[torch.randperm(len(index))]
         save_image(imgs2, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/imgs2.png")
 
         self.optimizer.zero_grad()
@@ -286,7 +286,7 @@ class CycleVAE():
         bloss = self.backward_loss(imgs, model, device)
 
         loss = floss + bloss * self.model_config['bloss_coef']
-        results.update_logs(["training_step", "loss"], [training_step, loss])
+        results_vae.update_logs(["training_step", "loss"], [training_step, loss])
 
         (floss + bloss * self.model_config['bloss_coef']).backward()
         print(loss)
@@ -353,6 +353,16 @@ class Agent():
     def update(self):
         self.training_step += 1
 
+        #tests
+        self.color_range = [0, 0.9]
+        self.this_episode_color = np.random.randint(int(255*self.color_range[0]), int(255*self.color_range[1]), 3)
+        obs_randomized = np.copy(self.buffer['s'][0])
+        obs_rand = np.transpose(obs_randomized, (2,1,0))
+        obs_rand[np.where((obs_rand[:,:,0]==102) & (obs_rand[:,:,1]==204) & (obs_rand[:,:,2]==102))] = self.this_episode_color
+        obs_rand = torch.tensor(obs_rand, dtype=torch.double).to(device)
+        print('saving image')
+        save_image(obs_rand.permute(2, 1, 0), "/home/mila/l/lea.cote-turcotte/LUSR/figures/chnage_color_%d.png" % (self.training_step))
+
         s = torch.tensor(self.buffer['s'], dtype=torch.double).to(device)
         a = torch.tensor(self.buffer['a'], dtype=torch.double).to(device)
         r = torch.tensor(self.buffer['r'], dtype=torch.double).to(device).view(-1, 1)
@@ -368,7 +378,7 @@ class Agent():
         training_step = self.training_step
         for _ in range(3):
             training_step =+ 1
-            for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size, False):
+            for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
                 training_step =+ 1
                 self.cycle_vae.update(s, s_, index, training_step, results_vae)
 
@@ -428,7 +438,7 @@ if __name__ == "__main__":
         running_score = running_score * 0.99 + score * 0.01
 
         if i_ep % args.log_interval == 0:
-            results.update_logs(["episode", "running_score", "score"], [i_ep, running_score, score])
+            results_ppo.update_logs(["episode", "running_score", "score"], [i_ep, running_score, score])
             print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, running_score))
             agent.save_param()
             results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(1))
