@@ -54,7 +54,7 @@ class Env():
         self.reward_threshold = self.env.spec.reward_threshold
 
     def process_obs(self, obs): # a single frame (96, 96, 3) for CarRacing
-        obs = np.ascontiguousarray(obs, dtype=np.float32)
+        obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
         obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
         return np.transpose(obs, (2,0,1))
 
@@ -239,18 +239,16 @@ class CycleVAE():
         recon_x1 = self.model.decoder(latentcode1)
         recon_x2 = self.model.decoder(latentcode2)
 
-        return vae_loss(x, mu, logsigma, recon_x1, beta) + vae_loss(x, mu, logsigma, recon_x2, beta)
+        return self.vae_loss(x, mu, logsigma, recon_x1, beta) + self.vae_loss(x, mu, logsigma, recon_x2, beta)
 
 
-    def backward_loss(x, device):
+    def backward_loss(self, x, device):
         mu, logsigma, classcode = self.model.encoder(x)
         shuffled_classcode = classcode[torch.randperm(classcode.shape[0])]
         randcontent = torch.randn_like(mu).to(device)
-        print((randcontent.shape, classcode.shape))
 
         latentcode1 = torch.cat([randcontent, classcode], dim=1)
         latentcode2 = torch.cat([randcontent, shuffled_classcode], dim=1)
-        print(latentcode2.shape)
 
         recon_imgs1 = self.model.decoder(latentcode1).detach()
         recon_imgs2 = self.model.decoder(latentcode2).detach()
@@ -266,7 +264,6 @@ class CycleVAE():
     
     def update(self, s, s_, index, training_step, results_vae):
         imgs = RandomTransform(s[index]).apply_transformations()
-        print(imgs.shape)
         imgs2 = s_[torch.randperm(len(index))]
         save_image(imgs2, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/imgs2.png")
 
@@ -283,14 +280,14 @@ class CycleVAE():
         # backward circle
         imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
         # batch of 50 imgaes with mix classes
-        bloss = self.backward_loss(imgs, model, device)
+        bloss = self.backward_loss(imgs, device)
 
         loss = floss + bloss * self.model_config['bloss_coef']
-        results_vae.update_logs(["training_step", "loss"], [training_step, loss])
+        results_vae.update_logs(["training_step", "loss"], [training_step, loss.item()])
 
         (floss + bloss * self.model_config['bloss_coef']).backward()
-        print(loss)
-        optimizer.step()
+        print(loss.item())
+        self.optimizer.step()
 
         # save image to check and save model 
         if training_step % 10 == 0:
@@ -304,7 +301,7 @@ class CycleVAE():
                 recon_combined = self.model.decoder(torch.cat([mu, classcode2], dim=1))
 
             saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=9)
+            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/%d.png" % (training_step), nrow=9)
 
 
 class Agent():
@@ -361,7 +358,7 @@ class Agent():
         obs_rand[np.where((obs_rand[:,:,0]==102) & (obs_rand[:,:,1]==204) & (obs_rand[:,:,2]==102))] = self.this_episode_color
         obs_rand = torch.tensor(obs_rand, dtype=torch.double).to(device)
         print('saving image')
-        save_image(obs_rand.permute(2, 1, 0), "/home/mila/l/lea.cote-turcotte/LUSR/figures/chnage_color_%d.png" % (self.training_step))
+        save_image(obs_rand.permute(2, 1, 0), "/home/mila/l/lea.cote-turcotte/LUSR/figures/change_color_%d.png" % (self.training_step))
 
         s = torch.tensor(self.buffer['s'], dtype=torch.double).to(device)
         a = torch.tensor(self.buffer['a'], dtype=torch.double).to(device)
@@ -376,12 +373,14 @@ class Agent():
             #adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
         training_step = self.training_step
+        print('updating cycle vae')
         for _ in range(3):
             training_step =+ 1
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
                 training_step =+ 1
                 self.cycle_vae.update(s, s_, index, training_step, results_vae)
 
+        print('updating agent')
         for _ in range(self.ppo_epoch):
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
 
