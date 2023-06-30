@@ -241,7 +241,6 @@ class CycleVAE():
 
         return self.vae_loss(x, mu, logsigma, recon_x1, beta) + self.vae_loss(x, mu, logsigma, recon_x2, beta)
 
-
     def backward_loss(self, x, device):
         mu, logsigma, classcode = self.model.encoder(x)
         shuffled_classcode = classcode[torch.randperm(classcode.shape[0])]
@@ -265,28 +264,25 @@ class CycleVAE():
     def update(self, s, s_, index, training_step, results_vae):
         imgs = RandomTransform(s[index]).apply_transformations()
         imgs2 = s_[torch.randperm(len(index))]
-        save_image(imgs2, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/imgs2.png")
 
         self.optimizer.zero_grad()
 
         floss = 0
-        for i_class in range(imgs.shape[0]): # imgs.shape[0] = 5 
-             # batch size 10 for each class (5 class)
+        for i_class in range(imgs.shape[0]):
             image = imgs[i_class]
             floss += self.forward_loss(image, self.model_config['beta'])
-            save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/%d.png" % (i_class))
+            save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/class_%d.png" % (i_class))
         floss = floss / imgs.shape[0] # divided by the number of classes
 
         # backward circle
-        imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
-        # batch of 50 imgaes with mix classes
+        imgs = imgs.reshape(-1, *imgs.shape[2:]) 
         bloss = self.backward_loss(imgs, device)
 
         loss = floss + bloss * self.model_config['bloss_coef']
         results_vae.update_logs(["training_step", "loss"], [training_step, loss.item()])
+        print(loss.item())
 
         (floss + bloss * self.model_config['bloss_coef']).backward()
-        print(loss.item())
         self.optimizer.step()
 
         # save image to check and save model 
@@ -350,16 +346,6 @@ class Agent():
     def update(self):
         self.training_step += 1
 
-        #tests
-        self.color_range = [0, 0.9]
-        self.this_episode_color = np.random.randint(int(255*self.color_range[0]), int(255*self.color_range[1]), 3)
-        obs_randomized = np.copy(self.buffer['s'][0])
-        obs_rand = np.transpose(obs_randomized, (2,1,0))
-        obs_rand[np.where((obs_rand[:,:,0]==102) & (obs_rand[:,:,1]==204) & (obs_rand[:,:,2]==102))] = self.this_episode_color
-        obs_rand = torch.tensor(obs_rand, dtype=torch.double).to(device)
-        print('saving image')
-        save_image(obs_rand.permute(2, 1, 0), "/home/mila/l/lea.cote-turcotte/LUSR/figures/change_color_%d.png" % (self.training_step))
-
         s = torch.tensor(self.buffer['s'], dtype=torch.double).to(device)
         a = torch.tensor(self.buffer['a'], dtype=torch.double).to(device)
         r = torch.tensor(self.buffer['r'], dtype=torch.double).to(device).view(-1, 1)
@@ -370,14 +356,15 @@ class Agent():
         with torch.no_grad():
             target_v = r + model_config['gamma'] * self.net(s_)[1]
             adv = target_v - self.net(s)[1]
-            #adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
         training_step = self.training_step
         print('updating cycle vae')
-        for _ in range(3):
-            training_step =+ 1
+        for epoch in range(3):
+            print(epoch)
+            training_step = training_step + 1
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
-                training_step =+ 1
+                training_step = training_step + 1
                 self.cycle_vae.update(s, s_, index, training_step, results_vae)
 
         print('updating agent')
