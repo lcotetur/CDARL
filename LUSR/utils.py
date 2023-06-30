@@ -63,22 +63,9 @@ class RandomTransform():
     def __init__(self, imgs):
         self.imgs = imgs
 
-    def apply_random_transformation(self):
-        imgs = []
-        #n = self.imgs.shape[0]
-        for img in self.imgs:
-            p = random.uniform(0, 1)
-            if p > 0.75:
-                imgs.append(self.random_crop(img))
-            elif 0.25 < p < 0.75:
-                imgs.append(self.random_blur(img))
-            else:
-                imgs.append(self.random_jitter(img))
-        return torch.stack(imgs)
-
     def apply_transformations(self):
-        n = self.imgs.shape[0]
-        m = int(n/4)
+        m = int(self.imgs.shape[0]/4)
+
         imgs_crop = self.random_crop(self.imgs[0:m, :, :, :])
         imgs_blur = self.random_blur(self.imgs[m:2*m, :, :, :])
         imgs_jitter = self.random_jitter(self.imgs[2*m:3*m, :, :, :])
@@ -98,14 +85,17 @@ class RandomTransform():
         return imgs
 
     def change_color_grass(self, img):
-        color_range = [0, 0.5]
-        this_episode_color = np.random.randint(int(255*color_range[0]), int(255*color_range[1]), 3) / 255
         obs_randomized = np.copy(img.cpu())
-        idx = np.random.randint(3)
-        grass_color = this_episode_color[idx] + 20
         obs_rand = np.transpose(obs_randomized, (2,1,0))
+
+        color_range = [0.1, 0.6]
+        idx = np.random.randint(3)
+        this_episode_color = np.random.randint(int(255*color_range[0]), int(255*color_range[1]), 3) / 255
+        grass_color = this_episode_color[1] + 20/255
+
         obs_rand[np.where((np.isclose(obs_rand[:,:,0], 0.4)) & np.isclose(obs_rand[:,:,1], 0.8) & np.isclose(obs_rand[:,:,2], 0.4))] = this_episode_color
         obs_rand[np.where((np.isclose(obs_rand[:,:,0], 0.4)) & np.isclose(obs_rand[:,:,1], 230/255) & np.isclose(obs_rand[:,:,2], 0.4))] = grass_color
+
         obs_rand = torch.tensor(obs_rand, dtype=torch.double).to('cuda')
         return obs_rand.permute(2, 1, 0)
 
@@ -115,15 +105,14 @@ class RandomTransform():
             p = random.uniform(0, 1)
             if p > 0.75:
                 imgs.append(self.change_color_grass(img))
-                save_image(self.change_color_grass(img), "/home/mila/l/lea.cote-turcotte/LUSR/figures/test4.png")
             elif 0.5 < p < 0.75:
                 imgs.append(self.change_color_grass(img))
-                save_image(self.change_color_grass(img), "/home/mila/l/lea.cote-turcotte/LUSR/figures/test6.png")
             elif 0.25 < p < 0.5:
                 imgs.append(self.change_color_grass(img))
             else:
                 imgs.append(img)
         return torch.stack(imgs)
+
 
 class Resutls():
     def __init__(self, title, xlabel=None, ylabel=None):

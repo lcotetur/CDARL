@@ -288,8 +288,8 @@ class CycleVAE():
         # save image to check and save model 
         if training_step % 10 == 0:
             rand_idx = torch.randperm(imgs.shape[0])
-            imgs1 = imgs[rand_idx[:9]]
-            imgs2 = imgs2[rand_idx[-9:]]
+            imgs1 = imgs2[rand_idx[-9:]]
+            imgs2 = imgs[rand_idx[:9]]
             with torch.no_grad():
                 mu, _, classcode1 = self.model.encoder(imgs1)
                 _, _, classcode2 = self.model.encoder(imgs2)
