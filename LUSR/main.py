@@ -276,20 +276,21 @@ class CycleVAE():
 
         # backward circle
         imgs = imgs.reshape(-1, *imgs.shape[2:]) 
+        save_image(imgs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/all_class.png")
         bloss = self.backward_loss(imgs, device)
 
         loss = floss + bloss * self.model_config['bloss_coef']
-        results_vae.update_logs(["training_step", "loss"], [training_step, loss.item()])
-        print(loss.item())
+        results_vae.update_logs(["vae_batches", "vae_epoch", "loss"], [vae_batches, vae_epoch, loss.item()])
 
         (floss + bloss * self.model_config['bloss_coef']).backward()
         self.optimizer.step()
 
         # save image to check and save model 
-        if training_step % 10 == 0:
+        if vae_batches % 1000 == 0:
+            print(f'{vae_epoch} Epoch ------ {vae_batches} Batches is Done ------ {loss.item()} loss')
             rand_idx = torch.randperm(imgs.shape[0])
-            imgs1 = imgs2[rand_idx[-9:]]
-            imgs2 = imgs[rand_idx[:9]]
+            imgs1 = imgs[rand_idx[-9:]]
+            imgs2 = imgs[rand_idx[9:]]
             with torch.no_grad():
                 mu, _, classcode1 = self.model.encoder(imgs1)
                 _, _, classcode2 = self.model.encoder(imgs2)
@@ -297,7 +298,7 @@ class CycleVAE():
                 recon_combined = self.model.decoder(torch.cat([mu, classcode2], dim=1))
 
             saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/%d.png" % (training_step), nrow=9)
+            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/%d_%d.png" % (vae_epoch, vae_batches), nrow=9)
 
 
 class Agent():
@@ -308,9 +309,9 @@ class Agent():
     clip_param = 0.1  # epsilon in clipped loss
     ppo_epoch = 10
     buffer_capacity, batch_size = 2000, 128
-    batch_size_vae = 400
+    batch_size_vae = 50
 
-    def __init__(self, model_config, results_vae):
+    def __init__(self, model_config, results_vae, vae_batches, vae_epoch):
         self.training_step = 0
         self.net = ActorCriticNet(model_config).double().to(device)
         self.cycle_vae = CycleVAE(model_config)
@@ -358,14 +359,12 @@ class Agent():
             adv = target_v - self.net(s)[1]
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-        training_step = self.training_step
         print('updating cycle vae')
-        for epoch in range(3):
-            print(epoch)
-            training_step = training_step + 1
+        for epoch in range(40):
+            vae_batches =+ self.batch_size_vae
+            vae_epoch =+ 1
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
-                training_step = training_step + 1
-                self.cycle_vae.update(s, s_, index, training_step, results_vae)
+                self.cycle_vae.update(s, s_, index, vae_batches, vae_epoch, results_vae)
 
         print('updating agent')
         for _ in range(self.ppo_epoch):
@@ -396,10 +395,12 @@ if __name__ == "__main__":
     results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="running_score")
     results_ppo.create_logs(labels=["episode", "running_score", "score"], init_values=[[], [], []])
 
-    results_vae = Resutls(title="Loss", xlabel="training_step", ylabel="loss")
-    results_vae.create_logs(labels=["training_step", "loss"], init_values=[[], []])
+    results_vae = Resutls(title="Cycle Consistent vae Loss", xlabel="vae_epoch", ylabel="loss")
+    results_vae.create_logs(labels=["vae_batches", "vae_epoch", "loss"], init_values=[[], [], []])
+    vae_batches = 0
+    vae_epoch = 0
 
-    agent = Agent(model_config, results_vae)
+    agent = Agent(model_config, results_vae, vae_batches, vae_epoch)
     env = Env()
 
     running_score = 0

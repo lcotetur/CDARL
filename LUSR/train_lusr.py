@@ -10,11 +10,11 @@ import numpy as np
 import argparse
 import os
 
-from utils import ExpDataset, reparameterize
-from model import DisentangledVAE, CarlaDisentangledVAE
+from utils import ExpDataset, reparameterize, RandomTransform
+from model import DisentangledVAE
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='./', type=str, help='path to the data')
+parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/carracing_data', type=str, help='path to the data')
 parser.add_argument('--data-tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--batch-size', default=10, type=int)
@@ -30,7 +30,7 @@ parser.add_argument('--flatten-size', default=1024, type=int)
 parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
 args = parser.parse_args()
 
-Model = CarlaDisentangledVAE if args.carla_model else DisentangledVAE
+Model = DisentangledVAE
 
 
 def updateloader(loader, dataset):
@@ -106,20 +106,32 @@ def main():
     for i_epoch in range(args.num_epochs):
         for i_split in range(args.num_splitted):
             for i_batch, imgs in enumerate(loader):
+
+                print(imgs)
+
                 batch_count += 1
                 # forward circle
-                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
+                # Try 
+                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
+                imgs = imgs.reshape(-1, *imgs.shape[2:])
+                imgs = RandomTransform(imgs).apply_transformations(nb_class=5)
+                #imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
                 optimizer.zero_grad()
 
                 floss = 0
-                for i_class in range(imgs.shape[0]):
+                for i_class in range(imgs.shape[0]): # imgs.shape[0] = 5 
+                    # batch size 10 for each class (5 class)
                     image = imgs[i_class]
                     floss += forward_loss(image, model, args.beta)
-                floss = floss / imgs.shape[0]
+                    save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/lusr_class_%d.png" % (i_class))
+                floss = floss / imgs.shape[0] # divided by the number of classes
 
                 # backward circle
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
+                imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
+                # batch of 50 imgaes with mix classes
                 bloss = backward_loss(imgs, model, device)
+
+                loss = floss + bloss * args.bloss_coef
 
                 (floss + bloss * args.bloss_coef).backward()
                 optimizer.step()
@@ -132,6 +144,7 @@ def main():
                 if i_batch % args.save_freq == 0:
                     print("%d Epochs, %d Splitted Data, %d Batches is Done." % (i_epoch, i_split, i_batch))
                     rand_idx = torch.randperm(imgs.shape[0])
+                    print(loss)
                     imgs1 = imgs[rand_idx[:9]]
                     imgs2 = imgs[rand_idx[-9:]]
                     with torch.no_grad():
@@ -141,10 +154,10 @@ def main():
                         recon_combined = model.decoder(torch.cat([mu, classcode2], dim=1))
 
                     saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-                    save_image(saved_imgs, "./checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=9)
+                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=9)
 
-                    torch.save(model.state_dict(), "./checkpoints/model.pt")
-                    torch.save(model.encoder.state_dict(), "./checkpoints/encoder.pt")
+                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/model.pt")
+                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder.pt")
 
             # load next splitted data
             updateloader(loader, dataset)

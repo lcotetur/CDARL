@@ -63,14 +63,31 @@ class RandomTransform():
     def __init__(self, imgs):
         self.imgs = imgs
 
-    def apply_transformations(self):
-        m = int(self.imgs.shape[0]/4)
+    def apply_transformations(self, nb_class=4):
+        m = int(self.imgs.shape[0]/nb_class)
 
-        imgs_crop = self.random_crop(self.imgs[0:m, :, :, :])
-        imgs_blur = self.random_blur(self.imgs[m:2*m, :, :, :])
+        imgs_crop = self.random_crop(self.random_jitter(self.imgs[0:m, :, :, :]))
+        imgs_blur = self.random_jitter(self.imgs[m:2*m, :, :, :])
         imgs_jitter = self.random_jitter(self.imgs[2*m:3*m, :, :, :])
-        imgs_norm = self.random_color_grass(self.imgs[3*m:4*m, :, :, :])
-        return torch.stack([imgs_crop, imgs_blur, imgs_jitter, imgs_norm])
+        imgs_norm = self.imgs[3*m:4*m, :, :, :]
+        if nb_class == 5:
+            imgs_other = self.random_jitter(self.imgs[4*m:5*m, :, :, :])
+            return torch.stack([imgs_crop, imgs_blur, imgs_jitter, imgs_norm, imgs_other])
+        else:
+            return torch.stack([imgs_crop, imgs_blur, imgs_jitter, imgs_norm])
+
+    def test(self, nb_class):
+        m = int(self.imgs.shape[0]/nb_class)
+
+        imgs = []
+        for i in range(nb_class):
+            if i == 0:
+                imgs.append(self.imgs[i:(i+1)*m, :, :, :])
+            if i == nb_class:
+                return torch.stack(imgs)
+            else:
+                imgs.append(self.random_jitter(self.imgs[i:(i+1)*m, :, :, :]))
+
 
     def random_jitter(self, imgs):
         imgs = transforms.ColorJitter(brightness=(0.5,1.5), contrast=(0.5), saturation=(0.5,1.5), hue=(-0.5,0.5))(imgs)
@@ -91,7 +108,7 @@ class RandomTransform():
         color_range = [0.1, 0.6]
         idx = np.random.randint(3)
         this_episode_color = np.random.randint(int(255*color_range[0]), int(255*color_range[1]), 3) / 255
-        grass_color = this_episode_color[1] + 20/255
+        grass_color = this_episode_color[idx] + 20/255
 
         obs_rand[np.where((np.isclose(obs_rand[:,:,0], 0.4)) & np.isclose(obs_rand[:,:,1], 0.8) & np.isclose(obs_rand[:,:,2], 0.4))] = this_episode_color
         obs_rand[np.where((np.isclose(obs_rand[:,:,0], 0.4)) & np.isclose(obs_rand[:,:,1], 230/255) & np.isclose(obs_rand[:,:,2], 0.4))] = grass_color
