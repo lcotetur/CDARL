@@ -94,11 +94,11 @@ class RandomTransform():
         return imgs
 
     def random_blur(self, imgs):
-        img = transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))(imgs)
+        imgs = transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))(imgs)
         return imgs
 
     def random_crop(self, imgs, output_size=64):
-        img = transforms.RandomCrop((output_size, output_size), padding=10)(imgs)
+        imgs = transforms.RandomCrop((output_size, output_size), padding=10)(imgs)
         return imgs
 
     def change_color_grass(self, img):

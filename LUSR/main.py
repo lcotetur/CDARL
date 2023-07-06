@@ -28,20 +28,65 @@ parser.add_argument('--vis', action='store_true', help='use visdom')
 parser.add_argument('--beta', default=10, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
 parser.add_argument('--class-latent-size', default=8, type=int)
-parser.add_argument('--content-latent-size', default=32, type=int)
+parser.add_argument('--content-latent-size', default=16, type=int)
 parser.add_argument(
     '--log-interval', type=int, default=10, metavar='N', help='interval between training status logs (default: 10)')
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
-#device = torch.device("cuda" if use_cuda else "cpu")
-device = torch.device("cpu")
+device = torch.device("cuda" if use_cuda else "cpu")
+#device = torch.device("cpu")
 torch.manual_seed(args.seed)
 if use_cuda:
     torch.cuda.manual_seed(args.seed)
 
 transition = np.dtype([('s', np.float64, (3, 64, 64)), ('a', np.float64, (3,)), ('a_logp', np.float64),
                        ('r', np.float64), ('s_', np.float64, (3, 64, 64))])
+
+def vae_loss(x, mu, logsigma, recon_x, beta=1):
+    recon_loss = F.mse_loss(x, recon_x, reduction='mean')
+    kl_loss = -0.5 * torch.sum(1 + logsigma - mu.pow(2) - logsigma.exp())
+    kl_loss = kl_loss / torch.numel(x)
+    return recon_loss + kl_loss * beta
+
+def reparameterize(mu, logsigma):
+    std = torch.exp(0.5*logsigma)
+    eps = torch.randn_like(std)
+    return mu + eps*std
+
+def forward_loss(x, model, beta):
+    mu, logsigma, classcode = model.encoder(x)
+    contentcode = reparameterize(mu, logsigma)
+    shuffled_classcode = classcode[torch.randperm(classcode.shape[0])]
+    print(classcode.shape)
+
+    latentcode1 = torch.cat([contentcode, shuffled_classcode], dim=1)
+    latentcode2 = torch.cat([contentcode, classcode], dim=1)
+
+    recon_x1 = model.decoder(latentcode1)
+    recon_x2 = model.decoder(latentcode2)
+
+    return vae_loss(x, mu, logsigma, recon_x1, beta) + vae_loss(x, mu, logsigma, recon_x2, beta)
+
+def backward_loss(x, model, device):
+    mu, logsigma, classcode = model.encoder(x)
+    shuffled_classcode = classcode[torch.randperm(classcode.shape[0])]
+    randcontent = torch.randn_like(mu).to(device)
+
+    latentcode1 = torch.cat([randcontent, classcode], dim=1)
+    latentcode2 = torch.cat([randcontent, shuffled_classcode], dim=1)
+
+    recon_imgs1 = model.decoder(latentcode1).detach()
+    recon_imgs2 = model.decoder(latentcode2).detach()
+
+    cycle_mu1, cycle_logsigma1, cycle_classcode1 = model.encoder(recon_imgs1)
+    cycle_mu2, cycle_logsigma2, cycle_classcode2 = model.encoder(recon_imgs2)
+
+    cycle_contentcode1 = reparameterize(cycle_mu1, cycle_logsigma1)
+    cycle_contentcode2 = reparameterize(cycle_mu2, cycle_logsigma2)
+
+    bloss = F.l1_loss(cycle_contentcode1, cycle_contentcode2)
+    return bloss
 
 class Env():
     """
@@ -114,7 +159,7 @@ class Env():
         return memory
 
 class Encoder(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
         super(Encoder, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
@@ -165,7 +210,7 @@ class Decoder(nn.Module):
         return x
 
 class DisentangledVAE(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, img_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 16, img_channel = 3, flatten_size = 1024):
         super(DisentangledVAE, self).__init__()
         self.encoder = Encoder(class_latent_size, content_latent_size, img_channel, flatten_size)
         self.decoder = Decoder(class_latent_size + content_latent_size, img_channel, flatten_size)
@@ -180,7 +225,7 @@ class DisentangledVAE(nn.Module):
         return mu, logsigma, classcode, recon_x
 
 class ActorCriticNet(nn.Module):
-    def __init__(self, model_config, content_latent_size=32):
+    def __init__(self, model_config, content_latent_size=16):
         nn.Module.__init__(self)
 
         self.main = Encoder()   
@@ -210,96 +255,6 @@ class ActorCriticNet(nn.Module):
 
         return (alpha, beta), v
 
-class CycleVAE():
-    def __init__(self, model_config):
-        nn.Module.__init__(self)
-        self.model_config = model_config
-        self.model = DisentangledVAE(class_latent_size = self.model_config['class_latent_size'], content_latent_size = self.model_config['content_latent_size']).double().to(device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.model_config['learning_rate'])
-
-    def vae_loss(self, x, mu, logsigma, recon_x, beta=1):
-        recon_loss = F.mse_loss(x, recon_x, reduction='mean')
-        kl_loss = -0.5 * torch.sum(1 + logsigma - mu.pow(2) - logsigma.exp())
-        kl_loss = kl_loss / torch.numel(x)
-        return recon_loss + kl_loss * beta
-
-    def reparameterize(self, mu, logsigma):
-        std = torch.exp(0.5*logsigma)
-        eps = torch.randn_like(std)
-        return mu + eps*std
-
-    def forward_loss(self, x, beta):
-        mu, logsigma, classcode = self.model.encoder(x)
-        contentcode = self.reparameterize(mu, logsigma)
-        shuffled_classcode = classcode[torch.randperm(classcode.shape[0])]
-
-        latentcode1 = torch.cat([contentcode, shuffled_classcode], dim=1)
-        latentcode2 = torch.cat([contentcode, classcode], dim=1)
-
-        recon_x1 = self.model.decoder(latentcode1)
-        recon_x2 = self.model.decoder(latentcode2)
-
-        return self.vae_loss(x, mu, logsigma, recon_x1, beta) + self.vae_loss(x, mu, logsigma, recon_x2, beta)
-
-    def backward_loss(self, x, device):
-        mu, logsigma, classcode = self.model.encoder(x)
-        shuffled_classcode = classcode[torch.randperm(classcode.shape[0])]
-        randcontent = torch.randn_like(mu).to(device)
-
-        latentcode1 = torch.cat([randcontent, classcode], dim=1)
-        latentcode2 = torch.cat([randcontent, shuffled_classcode], dim=1)
-
-        recon_imgs1 = self.model.decoder(latentcode1).detach()
-        recon_imgs2 = self.model.decoder(latentcode2).detach()
-
-        cycle_mu1, cycle_logsigma1, cycle_classcode1 = self.model.encoder(recon_imgs1)
-        cycle_mu2, cycle_logsigma2, cycle_classcode2 = self.model.encoder(recon_imgs2)
-
-        cycle_contentcode1 = self.reparameterize(cycle_mu1, cycle_logsigma1)
-        cycle_contentcode2 = self.reparameterize(cycle_mu2, cycle_logsigma2)
-
-        bloss = F.l1_loss(cycle_contentcode1, cycle_contentcode2)
-        return bloss
-    
-    def update(self, s, s_, index, training_step, results_vae):
-        imgs = RandomTransform(s[index]).apply_transformations()
-        imgs2 = s_[torch.randperm(len(index))]
-
-        self.optimizer.zero_grad()
-
-        floss = 0
-        for i_class in range(imgs.shape[0]):
-            image = imgs[i_class]
-            floss += self.forward_loss(image, self.model_config['beta'])
-            save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/class_%d.png" % (i_class))
-        floss = floss / imgs.shape[0] # divided by the number of classes
-
-        # backward circle
-        imgs = imgs.reshape(-1, *imgs.shape[2:]) 
-        save_image(imgs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/all_class.png")
-        bloss = self.backward_loss(imgs, device)
-
-        loss = floss + bloss * self.model_config['bloss_coef']
-        results_vae.update_logs(["vae_batches", "vae_epoch", "loss"], [vae_batches, vae_epoch, loss.item()])
-
-        (floss + bloss * self.model_config['bloss_coef']).backward()
-        self.optimizer.step()
-
-        # save image to check and save model 
-        if vae_batches % 1000 == 0:
-            print(f'{vae_epoch} Epoch ------ {vae_batches} Batches is Done ------ {loss.item()} loss')
-            rand_idx = torch.randperm(imgs.shape[0])
-            imgs1 = imgs[rand_idx[-9:]]
-            imgs2 = imgs[rand_idx[9:]]
-            with torch.no_grad():
-                mu, _, classcode1 = self.model.encoder(imgs1)
-                _, _, classcode2 = self.model.encoder(imgs2)
-                recon_imgs1 = self.model.decoder(torch.cat([mu, classcode1], dim=1))
-                recon_combined = self.model.decoder(torch.cat([mu, classcode2], dim=1))
-
-            saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/%d_%d.png" % (vae_epoch, vae_batches), nrow=9)
-
 
 class Agent():
     """
@@ -313,12 +268,16 @@ class Agent():
 
     def __init__(self, model_config, results_vae, vae_batches, vae_epoch):
         self.training_step = 0
+        self.vae_epoch = vae_epoch
+        self.vae_batches = vae_batches
         self.net = ActorCriticNet(model_config).double().to(device)
-        self.cycle_vae = CycleVAE(model_config)
         self.buffer = np.empty(self.buffer_capacity, dtype=transition)
         self.counter = 0
 
         self.optimizer = optim.Adam(self.net.parameters(), lr=1e-3)
+
+        self.model = DisentangledVAE(class_latent_size = model_config['class_latent_size'], content_latent_size = model_config['content_latent_size']).double().to(device)
+        self.vae_optimizer = optim.Adam(self.model.parameters(), lr=model_config['learning_rate'])
 
     def select_action(self, state):
         state = torch.from_numpy(state).double().to(device).unsqueeze(0)
@@ -360,11 +319,45 @@ class Agent():
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
         print('updating cycle vae')
-        for epoch in range(40):
-            vae_batches =+ self.batch_size_vae
-            vae_epoch =+ 1
+        for _ in range(10):
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
-                self.cycle_vae.update(s, s_, index, vae_batches, vae_epoch, results_vae)
+                self.vae_batches += self.batch_size_vae
+                imgs = RandomTransform(s[index]).apply_transformations()
+
+                floss = 0
+                for i_class in range(imgs.shape[0]):
+                    image = imgs[i_class]
+                    floss += forward_loss(image, self.model, model_config['beta'])
+                    save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/class_%d.png" % (i_class))
+                floss = floss / imgs.shape[0] # divided by the number of classes
+
+                # backward circle
+                imgs = imgs.reshape(-1, *imgs.shape[2:]) 
+                save_image(imgs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/all_class.png")
+                bloss = backward_loss(imgs, self.model, device)
+
+                loss = floss + bloss * model_config['bloss_coef']
+                results_vae.update_logs(["vae_batches", "vae_epoch", "loss"], [self.vae_batches, self.vae_epoch, loss.item()])
+
+                self.vae_optimizer.zero_grad()
+                (floss + bloss * model_config['bloss_coef']).backward()
+                self.vae_optimizer.step()
+
+                # save image to check and save model 
+                if self.vae_batches % 2000 == 0:
+                    print(f'{self.vae_epoch} Epoch ------ {self.vae_batches} Batches is Done ------ {loss.item()} loss')
+                    rand_idx = torch.randperm(imgs.shape[0])
+                    imgs1 = imgs[rand_idx[:9]]
+                    imgs2 = imgs[rand_idx[-9:]]
+                    with torch.no_grad():
+                        mu, _, classcode1 = self.model.encoder(imgs1)
+                        _, _, classcode2 = self.model.encoder(imgs2)
+                        recon_imgs1 = self.model.decoder(torch.cat([mu, classcode1], dim=1))
+                        recon_combined = self.model.decoder(torch.cat([mu, classcode2], dim=1))
+
+                    saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
+                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/z%d_%d.png" % (self.vae_epoch, self.vae_batches), nrow=9)
+            self.vae_epoch += 1
 
         print('updating agent')
         for _ in range(self.ppo_epoch):
@@ -383,7 +376,7 @@ class Agent():
 
                 self.optimizer.zero_grad()
                 loss.backward()
-                # nn.utils.clip_grad_norm_(self.net.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.net.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
 
@@ -397,10 +390,8 @@ if __name__ == "__main__":
 
     results_vae = Resutls(title="Cycle Consistent vae Loss", xlabel="vae_epoch", ylabel="loss")
     results_vae.create_logs(labels=["vae_batches", "vae_epoch", "loss"], init_values=[[], [], []])
-    vae_batches = 0
-    vae_epoch = 0
 
-    agent = Agent(model_config, results_vae, vae_batches, vae_epoch)
+    agent = Agent(model_config, results_vae, 0, 0)
     env = Env()
 
     running_score = 0
