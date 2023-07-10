@@ -35,7 +35,6 @@ args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
-#device = torch.device("cpu")
 torch.manual_seed(args.seed)
 if use_cuda:
     torch.cuda.manual_seed(args.seed)
@@ -58,7 +57,6 @@ def forward_loss(x, model, beta):
     mu, logsigma, classcode = model.encoder(x)
     contentcode = reparameterize(mu, logsigma)
     shuffled_classcode = classcode[torch.randperm(classcode.shape[0])]
-    print(classcode.shape)
 
     latentcode1 = torch.cat([contentcode, shuffled_classcode], dim=1)
     latentcode2 = torch.cat([contentcode, classcode], dim=1)
@@ -276,7 +274,7 @@ class Agent():
 
         self.optimizer = optim.Adam(self.net.parameters(), lr=1e-3)
 
-        self.model = DisentangledVAE(class_latent_size = model_config['class_latent_size'], content_latent_size = model_config['content_latent_size']).double().to(device)
+        self.model = DisentangledVAE(class_latent_size = model_config['class_latent_size'], content_latent_size = model_config['content_latent_size']).to(device)
         self.vae_optimizer = optim.Adam(self.model.parameters(), lr=model_config['learning_rate'])
 
     def select_action(self, state):
@@ -317,12 +315,13 @@ class Agent():
             target_v = r + model_config['gamma'] * self.net(s_)[1]
             adv = target_v - self.net(s)[1]
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-
-        print('updating cycle vae')
-        for _ in range(10):
+        
+        print('updating cycle consistent vae')
+        for _ in range(100):
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
-                self.vae_batches += self.batch_size_vae
-                imgs = RandomTransform(s[index]).apply_transformations()
+                self.vae_batches += 1
+                imgs = torch.tensor(self.buffer['s'][index], dtype=torch.float).to(device, non_blocking=True)
+                imgs = RandomTransform(imgs).apply_transformations()
 
                 floss = 0
                 for i_class in range(imgs.shape[0]):
@@ -333,7 +332,6 @@ class Agent():
 
                 # backward circle
                 imgs = imgs.reshape(-1, *imgs.shape[2:]) 
-                save_image(imgs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/all_class.png")
                 bloss = backward_loss(imgs, self.model, device)
 
                 loss = floss + bloss * model_config['bloss_coef']
@@ -383,7 +381,7 @@ class Agent():
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model_config = {'encoder_path':args.encoder_path, 'train_encoder':args.train_encoder, 'latent_size':args.latent_size, 'beta': args.beta, 'bloss_coef': args.bloss_coef, 'class_latent_size': args.class_latent_size, 'content_latent_size': args.content_latent_size, 'gamma': args.gamma, 'learning_rate': args.learning_rate, 'device': device}
+    model_config = {'encoder_path':args.encoder_path, 'train_encoder':args.train_encoder, 'latent_size':args.latent_size, 'beta': args.beta, 'bloss_coef': args.bloss_coef, 'class_latent_size': args.class_latent_size, 'content_latent_size': args.content_latent_size, 'gamma': args.gamma, 'learning_rate': args.learning_rate, 'device': device, 'data_dir': args.data_dir, 'data_tag':args.data_tag, 'num_splitted':args.num_splitted}
         
     results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="running_score")
     results_ppo.create_logs(labels=["episode", "running_score", "score"], init_values=[[], [], []])
@@ -407,7 +405,6 @@ if __name__ == "__main__":
             if args.render:
                 env.render()
             if agent.store((state, action, a_logp, reward, state_)):
-                print('updating')
                 agent.update()
             score += reward
             state = state_
