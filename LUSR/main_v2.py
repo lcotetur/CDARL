@@ -37,6 +37,8 @@ parser.add_argument('--class-latent-size', default=8, type=int)
 parser.add_argument('--content-latent-size', default=16, type=int)
 parser.add_argument('--log-interval', type=int, default=100, metavar='N', help='interval between training status logs (default: 10)')
 parser.add_argument('--num_workers', default=4, type=int)
+parser.add_argument('--entropy_coef', default=.01, type=float)
+parser.add_argument('--value_loss_coef', default=.5, type=float) #try 2.
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
@@ -122,7 +124,9 @@ class Env():
         processed_obs = self.process_obs(img_rgb)
         return processed_obs
 
+    '''
     def step(self, action):
+        action[0] = action[0]*2-1
         total_reward = 0
         for i in range(args.action_repeat):
             img_rgb, reward, die, _ = self.env.step(action)
@@ -139,6 +143,19 @@ class Env():
                 break
         img_rgb = self.process_obs(img_rgb)
         return img_rgb, total_reward, done, die
+    '''
+
+    def step(self, action):
+        rewards = 0
+        for i in range(args.action_repeat):
+            obs, reward, done, info = self.env.step(action)
+            reward = (-0.1 if reward < 0 else reward)
+            rewards += reward
+            # maybe try with reward memory (self.av_r)
+            if done:
+                break
+        processed_obs = self.process_obs(obs)
+        return processed_obs, rewards, done, info
 
     def render(self, *arg):
         self.env.render(*arg)
@@ -260,15 +277,15 @@ class DisentangledVAE(nn.Module):
         return mu, logsigma, classcode, recon_x
 
 class ActorCriticNet(nn.Module):
-    def __init__(self, model_config, content_latent_size=16):
+    def __init__(self, args, content_latent_size=16):
         nn.Module.__init__(self)
 
         self.main = Encoder()  
 
         #'''
-        if model_config['encoder_path'] is not None:
+        if args.encoder_path is not None:
             # saved checkpoints could contain extra weights such as linear_logsigma 
-            weights = torch.load(model_config['encoder_path'], map_location=torch.device('cuda'))
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
             for k in list(weights.keys()):
                 if k not in self.main.state_dict().keys():
                     del weights[k]
@@ -282,7 +299,7 @@ class ActorCriticNet(nn.Module):
         self.actor = nn.Sequential(nn.Linear(content_latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
         self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
         self.beta_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
-        self.train_encoder = model_config['train_encoder']
+        self.train_encoder = args.train_encoder
         #self.apply(self._weights_init)
         print("Train Encoder: ", self.train_encoder)
 
@@ -316,18 +333,18 @@ class Agent():
     buffer_capacity, batch_size = 2000, 200
     batch_size_vae = 50
 
-    def __init__(self, model_config, results_vae, vae_batches, vae_epoch):
+    def __init__(self, args, results_vae, vae_batches, vae_epoch):
         self.training_step = 0
         self.vae_epoch = vae_epoch
         self.vae_batches = vae_batches
-        self.net = ActorCriticNet(model_config).to(device)
+        self.net = ActorCriticNet(args).to(device)
         self.buffer = np.empty(self.buffer_capacity, dtype=transition)
         self.counter = 0
 
         self.optimizer = optim.Adam(self.net.parameters(), lr=1e-3)
 
-        self.model = DisentangledVAE(class_latent_size = model_config['class_latent_size'], content_latent_size = model_config['content_latent_size']).to(device)
-        self.vae_optimizer = optim.Adam(self.model.parameters(), lr=model_config['learning_rate'])
+        self.model = DisentangledVAE(class_latent_size = args.class_latent_size, content_latent_size = args.content_latent_size).to(device)
+        self.vae_optimizer = optim.Adam(self.model.parameters(), lr=args.learning_rate)
 
     def select_action(self, state):
         state = torch.from_numpy(state).to(device).unsqueeze(0)
@@ -342,7 +359,7 @@ class Agent():
         return action, a_logp
 
     def save_param(self):
-        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train.pt')
+        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train_v2.pt')
 
     def store(self, transition):
         self.buffer[self.counter] = transition
@@ -363,8 +380,9 @@ class Agent():
 
         old_a_logp = torch.tensor(self.buffer['a_logp'], dtype=torch.float).to(device).view(-1, 1)
 
+        #Generalized Advantage Estimation (gae)
         with torch.no_grad():
-            target_v = r + model_config['gamma'] * self.net(s_)[1]
+            target_v = r + args.gamma * self.net(s_)[1]
             adv = target_v - self.net(s)[1]
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
@@ -372,7 +390,7 @@ class Agent():
 
         print('updating cycle vae')
         transform = transforms.Compose([transforms.ToTensor()])
-        dataset = ExpDataset(model_config['data_dir'], model_config['data_tag'], 1, transform)
+        dataset = ExpDataset(args.data_dir, args.data_tag, 1, transform)
         loader = DataLoader(dataset, batch_size=10, shuffle=True, num_workers=4)
         for i_split in range(1):
             for i_batch, imgs in enumerate(loader):
@@ -388,7 +406,7 @@ class Agent():
                 for i_class in range(imgs.shape[0]): # imgs.shape[0] = 5 
                     # batch size 10 for each class (5 class)
                     image = imgs[i_class]
-                    floss += forward_loss(image, self.model, model_config['beta'])
+                    floss += forward_loss(image, self.model, args.beta)
                     save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/class_lusr_%d.png" % (i_class))
                 floss = floss / imgs.shape[0] # divided by the number of classes
 
@@ -397,10 +415,10 @@ class Agent():
                 # batch of 50 imgaes with mix classes
                 bloss = backward_loss(imgs, self.model, device)
 
-                loss = floss + bloss * model_config['bloss_coef']
+                loss = floss + bloss * args.bloss_coef
                 results_vae.update_logs(["vae_batches", "vae_epoch", "loss"], [self.vae_batches, self.vae_epoch, loss.item()])
 
-                (floss + bloss * model_config['bloss_coef']).backward()
+                (floss + bloss * args.bloss_coef).backward()
                 self.vae_optimizer.step()
 
                 # save image to check and save model 
@@ -433,7 +451,7 @@ class Agent():
                 floss = 0
                 for i_class in range(imgs.shape[0]):
                     image = imgs[i_class]
-                    floss += forward_loss(image, self.model, model_config['beta'])
+                    floss += forward_loss(image, self.model, args.beta)
                     save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/class_%d.png" % (i_class))
                 floss = floss / imgs.shape[0] # divided by the number of classes
 
@@ -441,11 +459,11 @@ class Agent():
                 imgs = imgs.reshape(-1, *imgs.shape[2:]) 
                 bloss = backward_loss(imgs, self.model, device)
 
-                loss = floss + bloss * model_config['bloss_coef']
+                loss = floss + bloss * args.bloss_coef
                 results_vae.update_logs(["vae_batches", "vae_epoch", "loss"], [self.vae_batches, self.vae_epoch, loss.item()])
 
                 self.vae_optimizer.zero_grad()
-                (floss + bloss * model_config['bloss_coef']).backward()
+                (floss + bloss * args.bloss_coef).backward()
                 self.vae_optimizer.step()
 
                 # save image to check and save model 
@@ -474,13 +492,15 @@ class Agent():
                 dist = Beta(alpha, beta)
                 a_logp = dist.log_prob(a[index]).sum(dim=1, keepdim=True)
                 ratio = torch.exp(a_logp - old_a_logp[index])
-
                 surr1 = ratio * adv[index]
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * adv[index]
                 action_loss = -torch.min(surr1, surr2).mean()
 
                 value_loss = F.smooth_l1_loss(self.net(s[index])[1], target_v[index])
-                loss = action_loss + 2. * value_loss
+
+                entorpy_loss = torch.mean(dist.entropy())
+
+                loss = action_loss + args.value_loss_coef * value_loss - args.entropy_coef * entorpy_loss
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -490,8 +510,6 @@ class Agent():
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    model_config = {'encoder_path':args.encoder_path, 'train_encoder':args.train_encoder, 'latent_size':args.latent_size, 'beta': args.beta, 'bloss_coef': args.bloss_coef, 'class_latent_size': args.class_latent_size, 'content_latent_size': args.content_latent_size, 'gamma': args.gamma, 'learning_rate': args.learning_rate, 'device': device, 'data_dir': args.data_dir, 'data_tag':args.data_tag, 'num_splitted':args.num_splitted}
         
     results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="running_score")
     results_ppo.create_logs(labels=["episode", "running_score", "episode_score", "training_time"], init_values=[[], [], [], []])
@@ -499,7 +517,7 @@ if __name__ == "__main__":
     results_vae = Resutls(title="Cycle Consistent vae Loss", xlabel="vae_epoch", ylabel="loss")
     results_vae.create_logs(labels=["vae_batches", "vae_epoch", "loss"], init_values=[[], [], []])
 
-    agent = Agent(model_config, results_vae, 0, 0)
+    agent = Agent(args, results_vae, 0, 0)
     env = Env()
 
     running_score = 0
@@ -515,7 +533,8 @@ if __name__ == "__main__":
 
         for t in range(2000):
             action, a_logp = agent.select_action(state)
-            state_, reward, done, die = env.step(action * np.array([2., 1., 1.]) + np.array([-1., 0., 0.]))
+            # replaced info by die
+            state_, reward, done, info = env.step(action * np.array([2., 1., 1.]) + np.array([-1., 0., 0.]))
             if args.render:
                 env.render()
             if agent.store((state, action, a_logp, reward, state_)):
@@ -524,7 +543,8 @@ if __name__ == "__main__":
             score += reward
             state = state_
             episode_lenght += 1
-            if done or die:
+            #if done or die
+            if done:
                 break
         episode_score = score
         running_score = running_score * 0.99 + score * 0.01

@@ -5,6 +5,7 @@ from ray.tune.registry import register_env
 from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from ray.rllib.models import ModelCatalog, ActionDistribution
 from ray.rllib.utils.annotations import override
+from video import VideoRecorder
 
 import torch
 import torch.nn as nn
@@ -21,16 +22,19 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='./', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train_v2.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
-parser.add_argument('--save-path', default='./', type=str)
+parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints', type=str)
 parser.add_argument('--action-repeat', default=4, type=int)
+parser.add_argument('--save_video', default=True, action='store_true')
+parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/LUSR', type=str)
 args = parser.parse_args()
 
 
 ######## obs preprocess ###########
 def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
+    obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
     obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
     obs = np.transpose(obs, (2,0,1))
     return torch.from_numpy(obs).unsqueeze(0)
@@ -49,7 +53,7 @@ class Encoder(nn.Module):
         self.linear_mu = nn.Linear(2*2*256, latent_size)
 
     def forward(self, x):
-        x = self.main(x/255.0)
+        x = self.main(x)
         x = x.view(x.size(0), -1)
         mu = self.linear_mu(x)
         return mu
@@ -83,6 +87,10 @@ class MyModel(nn.Module):
 
 ########### Do Evaluation #################
 def main():
+
+    video_dir = os.mkdir(os.path.join(args.work_dir, 'video'))
+    video = VideoRecorder(video_dir if args.save_video else None)
+
     results = []
     env = gym.make(args.env)
     model = MyModel(args.deterministic_sample, args.latent_size)
@@ -92,6 +100,8 @@ def main():
     for i in range(args.num_episodes):
         rewards, done, obs = 0, False, env.reset()
         obs = process_obs(obs)
+        print((i == 0))
+        video.init(enabled=(i == 0))
         while not done:
             action = model(obs)
             for _ in range(args.action_repeat):
@@ -102,8 +112,10 @@ def main():
             if args.render:
                 env.render()
             obs = process_obs(obs)
+        video.record(env)
         results.append(rewards)
 
+    video.save('%d.mp4' % i)
     print('Evaluate %d episodes and achieved %f scores' % (args.num_episodes, np.mean(results)))
     #file_name = "%s_%d_%s" % (args.env, args.num_episodes, 'results.txt')
     print(results)
