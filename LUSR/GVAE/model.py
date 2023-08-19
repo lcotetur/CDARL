@@ -7,6 +7,8 @@ from torch.autograd import Function
 from utils import reparameterize
 
 
+# TRY IMPLEMENTATION OF MLVAE then from it modify it so it is a GVAE 
+
 # Models for carracing games
 class EncoderStyle(nn.Module):
     def __init__(self, class_latent_size = 3, input_channel = 3, flatten_size = 1024):
@@ -15,14 +17,13 @@ class EncoderStyle(nn.Module):
         self.flatten_size = flatten_size
 
         self.main = nn.Sequential(
-            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+            nn.Conv2d(input_channel, 64, 5, stride=2, padding=2), nn.ReLU(),
+            nn.Conv2d(64, 64, 5, stride=2, padding=2), nn.ReLU(),
+            nn.Conv2d(64, 64, 5, stride=2, padding=2), nn.ReLU()
         )
 
-        self.linear_mu = nn.Linear(flatten_size, class_latent_size)
-        self.linear_var = nn.Softplus(nn.Linear(flatten_size, class_latent_size))
+        self.linear_mu = nn.Sequential(nn.Linear(flatten_size, 128), nn.ReLU(), nn.Linear(128, class_latent_size))
+        self.linear_var = nn.Sequential(nn.Linear(flatten_size, 128), nn.ReLU(), nn.Linear(128, class_latent_size), nn.Softplus())
 
     def forward(self, x):
         x = self.main(x)
@@ -44,18 +45,19 @@ class EncoderContent(nn.Module):
         self.flatten_size = flatten_size
 
         self.main = nn.Sequential(
-            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+            nn.Conv2d(input_channel, 64, 5, stride=2, padding=2), nn.ReLU(),
+            nn.Conv2d(64, 64, 5, stride=2, padding=2), nn.ReLU(),
+            nn.Conv2d(64, 64, 5, stride=2, padding=2), nn.ReLU()
         )
 
-        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
-        self.linear_var = nn.Softplus(nn.Linear(flatten_size, content_latent_size))
+
+        self.linear_mu = nn.Sequential(nn.Linear(flatten_size, 128), nn.ReLU(), nn.Linear(128, content_latent_size))
+        self.linear_var = nn.Sequential(nn.Linear(flatten_size, 128), nn.ReLU(), nn.Linear(128, content_latent_size), nn.Softplus())
 
     def forward(self, x):
         x = self.main(x)
         x = x.view(x.size(0), -1)
+        print(x.shape)
         mu = self.linear_mu(x)
         var = self.linear_var(x)
 
@@ -73,21 +75,21 @@ class Decoder(nn.Module):
         self.fc = nn.Linear(latent_size, flatten_size)
 
         self.main = nn.Sequential(
-            nn.ConvTranspose2d(flatten_size, 128, 5, stride=2), nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, 5, stride=2), nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, 6, stride=2), nn.ReLU(),
-            nn.ConvTranspose2d(32, 3, 6, stride=2), nn.Sigmoid()
+            nn.ConvTranspose2d(flatten_size, 64, 6, stride=2, padding=2), nn.ReLU(),
+            nn.ConvTranspose2d(64, 64, 6, stride=2, padding=2), nn.ReLU(),
+            nn.ConvTranspose2d(64, 64, 6, stride=2, padding=2), nn.Sigmoid()
         )
 
     def forward(self, x):
         x = self.fc(x)
         x = x.unsqueeze(-1).unsqueeze(-1)
+        print(x.shape)
         x = self.main(x)
         return x
 
  
 class GVAE(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 16, img_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 3, content_latent_size = 100, img_channel = 3, flatten_size = 1024):
         super(GVAE, self).__init__()
         self.encoder_style = EncoderStyle(class_latent_size, img_channel, flatten_size)
         self.encoder_content = EncoderContent(content_latent_size, img_channel, flatten_size)
