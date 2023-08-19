@@ -63,34 +63,30 @@ class RandomTransform():
     def __init__(self, imgs):
         self.imgs = imgs
 
-    def apply_transformations(self, nb_class=4):
+    def apply_transformations(self, nb_class=5):
         m = int(self.imgs.shape[0]/nb_class)
 
-        imgs_crop = self.random_crop(self.random_jitter(self.imgs[0:m, :, :, :]))
-        imgs_blur = self.random_jitter(self.imgs[m:2*m, :, :, :])
-        imgs_jitter = self.random_jitter(self.imgs[2*m:3*m, :, :, :])
-        imgs_norm = self.imgs[3*m:4*m, :, :, :]
-        if nb_class == 5:
-            imgs_other = self.random_jitter(self.imgs[4*m:5*m, :, :, :])
-            return torch.stack([imgs_crop, imgs_blur, imgs_jitter, imgs_norm, imgs_other])
-        else:
-            return torch.stack([imgs_crop, imgs_blur, imgs_jitter, imgs_norm])
-
-    def test(self, nb_class):
-        m = int(self.imgs.shape[0]/nb_class)
-
-        imgs = []
-        for i in range(nb_class):
+        transforms = []
+        for i in range(nb_class+1):
             if i == 0:
-                imgs.append(self.imgs[i:(i+1)*m, :, :, :])
+                transforms.append(self.random_crop(self.imgs[i*m:(i+1)*m, :, :, :]))
             if i == nb_class:
-                return torch.stack(imgs)
-            else:
-                imgs.append(self.random_jitter(self.imgs[i:(i+1)*m, :, :, :]))
+                return torch.stack(transforms)
+            elif(i != 0 and i != nb_class):
+                transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :]))
 
+    def domain_transformation(self, value=0.1):
+        if value == None:
+            return self.imgs
+        else:
+            return self.jitter(self.imgs, value)
 
+    def jitter(self, imgs, value):
+        imgs = transforms.ColorJitter(hue=(value))(imgs)
+        return imgs
+    
     def random_jitter(self, imgs):
-        imgs = transforms.ColorJitter(brightness=(0.5,1.5), contrast=(0.5), saturation=(0.5,1.5), hue=(-0.5,0.5))(imgs)
+        imgs = transforms.ColorJitter(hue=(-0.5,0.5))(imgs)
         return imgs
 
     def random_blur(self, imgs):
