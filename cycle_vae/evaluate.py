@@ -24,9 +24,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train_v2_offline.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train_v2.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
-parser.add_argument('--latent-size', default=32, type=int)
+parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints', type=str)
 parser.add_argument('--action-repeat', default=4, type=int)
 parser.add_argument('--save_video', default=True, action='store_true')
@@ -43,7 +43,7 @@ def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
     return torch.from_numpy(obs).unsqueeze(0)
 
 ######## models ##########
-'''
+#'''
 # Encoder download weights
 class Encoder(nn.Module):
     def __init__(self, latent_size = 32, input_channel = 3):
@@ -64,11 +64,10 @@ class Encoder(nn.Module):
         return mu
 
 '''
-
 # Encoder online
-#'''
+
 class Encoder(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
         super(Encoder, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
@@ -103,8 +102,8 @@ class MyModel(nn.Module):
     def __init__(self, deterministic_sample=False, latent_size=16):
         nn.Module.__init__(self)
 
-        self.main = Encoder(class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024)
-        #self.main = Encoder(latent_size=latent_size)
+        #self.main = Encoder(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
+        self.main = Encoder(latent_size=latent_size)
         self.critic = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
         self.actor = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
         self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
@@ -150,7 +149,7 @@ def main():
         if domain == 0:
             color = None
         else:
-            color = np.random.randint(-5, 5)/10
+            color = np.random.randint(0, 5)/10
         print(color)
         domain_results = []
         for i in range(args.num_episodes):
@@ -179,7 +178,7 @@ def main():
         print(results)
         #torch.save(results, os.path.join(args.save_path, file_name))
         domain_results.append(results)
-    with open(os.path.join(args.save_path, 'eval_train_v2_offline.py'), 'w') as f:
+    with open(os.path.join(args.save_path, 'eval_train_v2.py'), 'w') as f:
         f.write('score = %s' % domain_results)
 
 if __name__ == '__main__':
