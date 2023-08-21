@@ -375,12 +375,12 @@ class Agent():
 
                     saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
                     save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/z%d_%d.png" % (self.vae_epoch, self.vae_batches), nrow=9)
-                    torch.save(self.model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_trainv2_offline.pt")
+                    torch.save(self.model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_offline.pt")
             self.vae_epoch += 1
 
         print('updating agent')
         for _ in range(self.ppo_epoch):
-            for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
+            for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size, False):
 
                 alpha, beta = self.net(s[index])[0]
                 dist = Beta(alpha, beta)
@@ -405,8 +405,8 @@ class Agent():
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-    results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="running_score")
-    results_ppo.create_logs(labels=["episode", "running_score", "episode_score", "training_time"], init_values=[[], [], [], []])
+    results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="endtoend_running_score")
+    results_ppo.create_logs(labels=["episode", "endtoend_running_score", "endtoend_episode_score", "training_time"], init_values=[[], [], [], []])
 
     results_vae = Resutls(title="Cycle Consistent vae Loss", xlabel="vae_epoch", ylabel="loss")
     results_vae.create_logs(labels=["vae_batches", "vae_epoch", "loss"], init_values=[[], [], []])
@@ -414,13 +414,13 @@ if __name__ == "__main__":
     agent = Agent(args, results_vae, 0, 0)
     env = Env()
 
-    running_score = 0
+    endtoend_running_score = 0
     training_time = 0
     state = env.reset()
     start_time = time.time()
     # 100000
     for i_ep in range(10000):
-        episode_score = 0
+        endtoend_episode_score = 0
         score = 0
         episode_lenght = 0
         state = env.reset()
@@ -438,23 +438,23 @@ if __name__ == "__main__":
             episode_lenght += 1
             if done or die:
                 break
-        episode_score = score
-        running_score = running_score * 0.99 + score * 0.01
+        endtoend_episode_score = score
+        endtoend_running_score = endtoend_running_score * 0.99 + score * 0.01
 
         if i_ep % args.log_interval == 0:
             training_time = time.time() - start_time
-            results_ppo.update_logs(["episode", "running_score", "episode_score", "training_time"], [i_ep, running_score, episode_score, training_time])
-            print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, running_score))
+            results_ppo.update_logs(["episode", "endtoend_running_score", "endtoend_episode_score", "training_time"], [i_ep, endtoend_running_score, endtoend_episode_score, training_time])
+            print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, endtoend_running_score))
             print('Training time: {:.2f}\t'.format(training_time))
             agent.save_param()
             results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(1))
             results_vae.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(2))
-        if running_score > env.reward_threshold:
+        if endtoend_running_score > env.reward_threshold:
             results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(1))
             results_vae.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(2))
             results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/1','/home/mila/l/lea.cote-turcotte/LUSR/figures')
             results_vae.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/2','/home/mila/l/lea.cote-turcotte/LUSR/figures')
-            print("Solved! Running reward is now {} and the last episode runs to {}!".format(running_score, score))
+            print("Solved! Running reward is now {} and the last episode runs to {}!".format(endtoend_running_score, score))
             break
     results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(1))
     results_vae.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(2))

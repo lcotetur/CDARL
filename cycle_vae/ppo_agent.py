@@ -227,19 +227,19 @@ class Agent():
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="invariant_repr_running_score")
-    results_ppo.create_logs(labels=["episode", "invariant_repr_running_score", "episode_score", "training_time"], init_values=[[], [], [], []])
+    results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="ppo_running_score")
+    results_ppo.create_logs(labels=["episode", "ppo_running_score", "ppo_episode_score", "training_time"], init_values=[[], [], [], []])
 
     agent = Agent(args)
     env = Env()
 
-    invariant_repr_running_score = 0
+    ppo_running_score = 0
     training_time = 0
     state = env.reset()
     start_time = time.time()
     # 100000
     for i_ep in range(10000):
-        episode_score = 0
+        ppo_episode_score = 0
         score = 0
         episode_lenght = 0
         state = env.reset()
@@ -257,20 +257,20 @@ if __name__ == "__main__":
             episode_lenght += 1
             if done or die:
                 break
-        episode_score = score
-        invariant_repr_running_score = invariant_repr_running_score * 0.99 + score * 0.01
+        ppo_episode_score = score
+        ppo_running_score = ppo_running_score * 0.99 + score * 0.01
 
         if i_ep % args.log_interval == 0:
             training_time = time.time() - start_time
-            results_ppo.update_logs(["episode", "invariant_repr_running_score", "episode_score", "training_time"], [i_ep, invariant_repr_running_score, episode_score, training_time])
-            print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, invariant_repr_running_score))
+            results_ppo.update_logs(["episode", "ppo_running_score", "ppo_episode_score", "training_time"], [i_ep, ppo_running_score, ppo_episode_score, training_time])
+            print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, ppo_running_score))
             print('Training time: {:.2f}\t'.format(training_time))
             agent.save_param()
-            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(3))
-        if invariant_repr_running_score > env.reward_threshold:
-            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(3))
-            results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/1','/home/mila/l/lea.cote-turcotte/LUSR/figures')
-            print("Solved! Running reward is now {} and the last episode runs to {}!".format(invariant_repr_running_score, score))
+            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(5))
+        if ppo_running_score > env.reward_threshold:
+            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(5))
+            results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/5','/home/mila/l/lea.cote-turcotte/LUSR/figures')
+            print("Solved! Running reward is now {} and the last episode runs to {}!".format(ppo_running_score, score))
             break
-    results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(3))
-    results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/1', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
+    results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(5))
+    results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/5', '/home/mila/l/lea.cote-turcotte/LUSR/figures')

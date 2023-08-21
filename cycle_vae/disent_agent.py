@@ -19,10 +19,10 @@ import time
 
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
 parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder.pt')
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_offline.pt')
 parser.add_argument('--train-encoder', default=False, type=bool)
 parser.add_argument('--learning-rate', default=0.0002, type=float)
-parser.add_argument('--content-size', default=32, type=int)
+parser.add_argument('--content-size', default=16, type=int)
 parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
 parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
@@ -32,7 +32,7 @@ parser.add_argument('--num_workers', default=4, type=int)
 parser.add_argument('--entropy_coef', default=.01, type=float)
 parser.add_argument('--value_loss_coef', default=2., type=float)
 parser.add_argument('--class-latent-size', default=8, type=int)
-parser.add_argument('--content-latent-size', default=32, type=int)
+parser.add_argument('--content-latent-size', default=16, type=int)
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
@@ -119,7 +119,7 @@ class Env():
         return memory
 
 class Encoder(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
         super(Encoder, self).__init__()
 
         self.main = nn.Sequential(
@@ -129,7 +129,7 @@ class Encoder(nn.Module):
             nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
         )
 
-        self.linear_mu = nn.Linear(flatten_size, scontent_latent_size)
+        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
         self.linear_logsigma = nn.Linear(flatten_size, content_latent_size)
         self.linear_classcode = nn.Linear(flatten_size, class_latent_size)
 
@@ -139,13 +139,12 @@ class Encoder(nn.Module):
         mu = self.linear_mu(x)
         logsigma = self.linear_logsigma(x)
         classcode = self.linear_classcode(x)
-
         return mu, logsigma, classcode
 
 class ActorCriticNet(nn.Module):
-    def __init__(self, args, latent_size=40):
+    def __init__(self, args, latent_size=24):
         nn.Module.__init__(self)
-
+        self.latent_size = args.content_latent_size + args.class_latent_size
         self.main = Encoder()  
 
         if args.encoder_path is not None:
@@ -160,8 +159,8 @@ class ActorCriticNet(nn.Module):
             print("No Load Weights")
         
 
-        self.critic = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
-        self.actor = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
+        self.critic = nn.Sequential(nn.Linear(self.latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
+        self.actor = nn.Sequential(nn.Linear(self.latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
         self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
         self.beta_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
         self.train_encoder = args.train_encoder
@@ -234,7 +233,7 @@ class Agent():
         return action, a_logp
 
     def save_param(self):
-        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_invar.pt')
+        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_disent.pt')
 
     def store(self, transition):
         self.buffer[self.counter] = transition
@@ -263,7 +262,7 @@ class Agent():
 
         print('updating agent')
         for _ in range(self.ppo_epoch):
-            for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
+            for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size, False):
 
                 alpha, beta = self.net(s[index])[0]
                 dist = Beta(alpha, beta)
@@ -288,19 +287,19 @@ class Agent():
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-    results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="invariant_repr_running_score")
-    results_ppo.create_logs(labels=["episode", "invariant_repr_running_score", "episode_score", "training_time"], init_values=[[], [], [], []])
+    results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="disentangle_repr_running_score")
+    results_ppo.create_logs(labels=["episode", "disentangle_repr_running_score", "disentangle_repr_episode_score", "training_time"], init_values=[[], [], [], []])
 
     agent = Agent(args)
     env = Env()
 
-    invariant_repr_running_score = 0
+    disentangle_repr_running_score = 0
     training_time = 0
     state = env.reset()
     start_time = time.time()
     # 100000
     for i_ep in range(10000):
-        episode_score = 0
+        disentangle_repr_episode_score = 0
         score = 0
         episode_lenght = 0
         state = env.reset()
@@ -318,20 +317,20 @@ if __name__ == "__main__":
             episode_lenght += 1
             if done or die:
                 break
-        episode_score = score
-        invariant_repr_running_score = invariant_repr_running_score * 0.99 + score * 0.01
+        disentangle_repr_episode_score = score
+        disentangle_repr_running_score = disentangle_repr_running_score * 0.99 + score * 0.01
 
         if i_ep % args.log_interval == 0:
             training_time = time.time() - start_time
-            results_ppo.update_logs(["episode", "invariant_repr_running_score", "episode_score", "training_time"], [i_ep, invariant_repr_running_score, episode_score, training_time])
-            print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, invariant_repr_running_score))
+            results_ppo.update_logs(["episode", "disentangle_repr_running_score", "disentangle_repr_episode_score", "training_time"], [i_ep, disentangle_repr_running_score, disentangle_repr_episode_score, training_time])
+            print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, disentangle_repr_running_score))
             print('Training time: {:.2f}\t'.format(training_time))
             agent.save_param()
-            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(3))
-        if invariant_repr_running_score > env.reward_threshold:
-            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(3))
-            results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/1','/home/mila/l/lea.cote-turcotte/LUSR/figures')
-            print("Solved! Running reward is now {} and the last episode runs to {}!".format(invariant_repr_running_score, score))
+            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(4))
+        if disentangle_repr_running_score > env.reward_threshold:
+            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(4))
+            results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/4','/home/mila/l/lea.cote-turcotte/LUSR/figures')
+            print("Solved! Running reward is now {} and the last episode runs to {}!".format(disentangle_repr_running_score, score))
             break
-    results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(3))
-    results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/1', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
+    results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(4))
+    results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/4', '/home/mila/l/lea.cote-turcotte/LUSR/figures')

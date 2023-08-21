@@ -26,7 +26,7 @@ parser.add_argument('--policy-type', default='end-to-end', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train_v2.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ppo.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
@@ -91,28 +91,30 @@ class EncoderE(nn.Module):
         classcode = self.linear_classcode(x)
         return mu
 
-    def get_feature(self, x):
-        mu, logsigma, classcode = self.forward(x)
-        return mu
-
 class MyModel(nn.Module):
     def __init__(self, policy_type, deterministic_sample=False, latent_size=16):
         nn.Module.__init__(self)
+        self.policy_type = policy_type
 
         # evaluate policy with end-to-end training
-        if policy_type == 'end_to_end':
+        if self.policy_type == 'end_to_end':
             latent_size = 16
             self.main = EncoderE(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
         
         # evaluate policy not end-to-end
-        elif polic_type == 'download':
+        elif self.policy_type == 'download':
             latent_size = 32
             self.main = EncoderD(latent_size=latent_size)
     
         # evaluate policy no encoder
-        elif policy_type == 'ppo':
+        elif self.policy_type == 'ppo':
             latent_size = 2*2*256
-            self.main = nn.Sequential(nn.Conv2d(3, 32, 4, stride=2), nn.ReLU(), nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(), nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(), nn.Conv2d(128, 256, 4, stride=2), nn.ReLU())
+            self.cnn_base = nn.Sequential(
+                    nn.Conv2d(3, 32, 4, stride=2), nn.ReLU(),
+                    nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+                    nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+                    nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+                )
 
         self.critic = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
         self.actor = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
@@ -122,8 +124,8 @@ class MyModel(nn.Module):
 
     def forward(self, x):
         with torch.no_grad():
-            if policy_type == 'ppo':
-                x = self.main(x)
+            if self.policy_type == 'ppo':
+                x = self.cnn_base(x)
                 features = x.view(x.size(0), -1)
             else:
                 features = self.main(x)
@@ -153,7 +155,7 @@ def main():
     video = VideoRecorder(video_dir if args.save_video else None)
 
     env = gym.make(args.env)
-    model = MyModel(args.polity_type, args.deterministic_sample, args.latent_size)
+    model = MyModel(args.policy_type, args.deterministic_sample, args.latent_size)
     weights = torch.load(args.model_path, map_location=torch.device('cpu'))
     model.load_state_dict(weights)
 
