@@ -1,1 +1,1 @@
-Code from https://github.com/KarlXing/LUSR/
+Code inpired from https://github.com/KarlXing/LUSR/ and https://github.com/xtma/pytorch_car_caring/

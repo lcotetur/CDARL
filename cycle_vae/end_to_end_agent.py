@@ -18,9 +18,6 @@ from torchvision import transforms
 import time
 
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/carracing_data', type=str, help='path to the data')
-parser.add_argument('--data-tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
-parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
 parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_offline.pt')
 parser.add_argument('--train-encoder', default=False, type=bool)
@@ -44,6 +41,7 @@ args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
+#device = torch.device("cpu")
 torch.manual_seed(args.seed)
 if use_cuda:
     torch.cuda.manual_seed(args.seed)
@@ -143,20 +141,6 @@ class Env():
         img_rgb = self.process_obs(img_rgb)
         return img_rgb, total_reward, done, die
 
-    '''
-    def step(self, action):
-        rewards = 0
-        for i in range(args.action_repeat):
-            obs, reward, done, info = self.env.step(action)
-            reward = (-0.1 if reward < 0 else reward)
-            rewards += reward
-            # maybe try with reward memory (self.av_r)
-            if done:
-                break
-        processed_obs = self.process_obs(obs)
-        return processed_obs, rewards, done, info
-    '''
-
     def render(self, *arg):
         self.env.render(*arg)
 
@@ -184,8 +168,6 @@ class Env():
 
         return memory
 
-# Encoder for online training
-   # '''
 class Encoder(nn.Module):
     def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
         super(Encoder, self).__init__()
@@ -224,27 +206,6 @@ class Encoder(nn.Module):
     def get_feature(self, x):
         mu, logsigma, classcode = self.forward(x)
         return mu
-    #'''
-'''
-# Encoder for offline training
-class Encoder(nn.Module):
-    def __init__(self, latent_size = 16, input_channel = 3):
-        super(Encoder, self).__init__()
-        self.latent_size = latent_size
-        self.main = nn.Sequential(
-            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
-        )
-        self.linear_mu = nn.Linear(2*2*256, latent_size)
-
-    def forward(self, x):
-        x = self.main(x)
-        x = x.view(x.size(0), -1)
-        mu = self.linear_mu(x)
-        return mu
-'''
 
 class Decoder(nn.Module):
     def __init__(self, latent_size=32, output_channel=3, flatten_size=1024):
@@ -259,7 +220,7 @@ class Decoder(nn.Module):
             nn.ConvTranspose2d(32, 3, 6, stride=2), nn.Sigmoid()
         )
         self.apply(self._weights_init)
-        
+
     @staticmethod
     def _weights_init(m):
         if isinstance(m, nn.Conv2d):
@@ -275,12 +236,8 @@ class Decoder(nn.Module):
 class DisentangledVAE(nn.Module):
     def __init__(self, class_latent_size = 8, content_latent_size = 32, img_channel = 3, flatten_size = 1024):
         super(DisentangledVAE, self).__init__()
-        #online encoder decoder
         self.encoder = Encoder(class_latent_size, content_latent_size, img_channel, flatten_size)
         self.decoder = Decoder(class_latent_size + content_latent_size, img_channel, flatten_size)
-
-        #self.encoder = Encoder(content_latent_size, img_channel)
-        #self.decoder = Decoder(class_latent_size + content_latent_size, img_channel, flatten_size)
 
     def forward(self, x):
         mu, logsigma, classcode = self.encoder(x)
@@ -297,36 +254,15 @@ class ActorCriticNet(nn.Module):
 
         self.main = Encoder()  
 
-        '''
-        if args.encoder_path is not None:
-            # saved checkpoints could contain extra weights such as linear_logsigma 
-            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.main.state_dict().keys():
-                    del weights[k]
-            self.main.load_state_dict(weights)
-            print("Loaded Weights")
-        else:
-            print("No Load Weights")
-        '''
-
         self.critic = nn.Sequential(nn.Linear(content_latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
         self.actor = nn.Sequential(nn.Linear(content_latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
         self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
         self.beta_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
         self.train_encoder = args.train_encoder
-        #self.apply(self._weights_init)
         print("Train Encoder: ", self.train_encoder)
-
-    @staticmethod
-    def _weights_init(m):
-        if isinstance(m, nn.Conv2d):
-            nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
-            nn.init.constant_(m.bias, 0.1)
 
     def forward(self, input):
         features = self.main.get_feature(input) #for online encoder
-        #features = self.main(input.float())
         if not self.train_encoder:
             features = features.detach()  # not train the encoder
 
@@ -374,7 +310,7 @@ class Agent():
         return action, a_logp
 
     def save_param(self):
-        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train_v2_offline.pt')
+        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_end_to_end.pt')
 
     def store(self, transition):
         self.buffer[self.counter] = transition
@@ -401,62 +337,6 @@ class Agent():
             adv = target_v - self.net(s)[1]
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-        """
-
-        print('updating cycle vae')
-        transform = transforms.Compose([transforms.ToTensor()])
-        dataset = ExpDataset(args.data_dir, args.data_tag, 1, transform)
-        loader = DataLoader(dataset, batch_size=10, shuffle=True, num_workers=4)
-        for i_split in range(1):
-            for i_batch, imgs in enumerate(loader):
-                self.vae_batches += 1
-                # forward circle
-                # Try 
-                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs = RandomTransform(imgs).apply_transformations()
-                self.vae_optimizer.zero_grad()
-
-                floss = 0
-                for i_class in range(imgs.shape[0]): # imgs.shape[0] = 5 
-                    # batch size 10 for each class (5 class)
-                    image = imgs[i_class]
-                    floss += forward_loss(image, self.model, args.beta)
-                    save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/class_lusr_%d.png" % (i_class))
-                floss = floss / imgs.shape[0] # divided by the number of classes
-
-                # backward circle
-                imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
-                # batch of 50 imgaes with mix classes
-                bloss = backward_loss(imgs, self.model, device)
-
-                loss = floss + bloss * args.bloss_coef
-                results_vae.update_logs(["vae_batches", "vae_epoch", "loss"], [self.vae_batches, self.vae_epoch, loss.item()])
-
-                (floss + bloss * args.bloss_coef).backward()
-                self.vae_optimizer.step()
-
-                # save image to check and save model 
-                if i_batch % 1000 == 0:
-                    print("%d Splitted Data, %d Batches is Done." % (i_split, i_batch))
-                    rand_idx = torch.randperm(imgs.shape[0])
-                    imgs1 = imgs[rand_idx[:9]]
-                    imgs2 = imgs[rand_idx[-9:]]
-                    with torch.no_grad():
-                        mu, _, classcode1 = self.model.encoder(imgs1)
-                        _, _, classcode2 = self.model.encoder(imgs2)
-                        recon_imgs1 = self.model.decoder(torch.cat([mu, classcode1], dim=1))
-                        recon_combined = self.model.decoder(torch.cat([mu, classcode2], dim=1))
-
-                    saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/y%d_%d.png" % (i_split,i_batch), nrow=9)
-                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_data_lusr.pt")
-            self.vae_epoch += 1
-            # load next splitted data
-            updateloader(loader, dataset)
-
-            """
-        #'''
         for _ in range(100):
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
                 self.vae_batches += 1
@@ -497,7 +377,7 @@ class Agent():
                     save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/z%d_%d.png" % (self.vae_epoch, self.vae_batches), nrow=9)
                     torch.save(self.model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_trainv2_offline.pt")
             self.vae_epoch += 1
-            ##'''
+
         print('updating agent')
         for _ in range(self.ppo_epoch):
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):

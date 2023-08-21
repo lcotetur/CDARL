@@ -19,15 +19,17 @@ import cv2
 import os
 import numpy as np
 import argparse
+import time
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--policy-type', default='end-to-end', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
 parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train_v2.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
-parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints', type=str)
+parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
 parser.add_argument('--action-repeat', default=4, type=int)
 parser.add_argument('--save_video', default=True, action='store_true')
 parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/LUSR', type=str)
@@ -43,11 +45,10 @@ def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
     return torch.from_numpy(obs).unsqueeze(0)
 
 ######## models ##########
-#'''
 # Encoder download weights
-class Encoder(nn.Module):
+class EncoderD(nn.Module):
     def __init__(self, latent_size = 32, input_channel = 3):
-        super(Encoder, self).__init__()
+        super(EncoderD, self).__init__()
         self.latent_size = latent_size
         self.main = nn.Sequential(
             nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
@@ -63,12 +64,10 @@ class Encoder(nn.Module):
         mu = self.linear_mu(x)
         return mu
 
-'''
-# Encoder online
-
-class Encoder(nn.Module):
+# Encoder end-to-end
+class EncoderE(nn.Module):
     def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
-        super(Encoder, self).__init__()
+        super(EncoderE, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
         self.flatten_size = flatten_size
@@ -90,20 +89,31 @@ class Encoder(nn.Module):
         mu = self.linear_mu(x)
         logsigma = self.linear_logsigma(x)
         classcode = self.linear_classcode(x)
-
         return mu
 
     def get_feature(self, x):
         mu, logsigma, classcode = self.forward(x)
         return mu
-#'''
 
 class MyModel(nn.Module):
-    def __init__(self, deterministic_sample=False, latent_size=16):
+    def __init__(self, policy_type, deterministic_sample=False, latent_size=16):
         nn.Module.__init__(self)
 
-        #self.main = Encoder(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
-        self.main = Encoder(latent_size=latent_size)
+        # evaluate policy with end-to-end training
+        if policy_type == 'end_to_end':
+            latent_size = 16
+            self.main = EncoderE(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
+        
+        # evaluate policy not end-to-end
+        elif polic_type == 'download':
+            latent_size = 32
+            self.main = EncoderD(latent_size=latent_size)
+    
+        # evaluate policy no encoder
+        elif policy_type == 'ppo':
+            latent_size = 2*2*256
+            self.main = nn.Sequential(nn.Conv2d(3, 32, 4, stride=2), nn.ReLU(), nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(), nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(), nn.Conv2d(128, 256, 4, stride=2), nn.ReLU())
+
         self.critic = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
         self.actor = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
         self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
@@ -112,7 +122,11 @@ class MyModel(nn.Module):
 
     def forward(self, x):
         with torch.no_grad():
-            features = self.main(x)
+            if policy_type == 'ppo':
+                x = self.main(x)
+                features = x.view(x.size(0), -1)
+            else:
+                features = self.main(x)
             actor_features = self.actor(features)
             alpha = self.alpha_head(actor_features)+1
             beta = self.beta_head(actor_features)+1
@@ -135,15 +149,16 @@ class MyModel(nn.Module):
 ########### Do Evaluation #################
 def main():
 
-    #video_dir = os.mkdir(os.path.join(args.work_dir, 'video'))
     video_dir = os.path.join(args.work_dir, 'video')
     video = VideoRecorder(video_dir if args.save_video else None)
 
-    results = []
     env = gym.make(args.env)
-    model = MyModel(args.deterministic_sample, args.latent_size)
+    model = MyModel(args.polity_type, args.deterministic_sample, args.latent_size)
     weights = torch.load(args.model_path, map_location=torch.device('cpu'))
     model.load_state_dict(weights)
+
+    domains_results = []
+    domains_means = []
 
     for domain in range(args.nb_domain):
         if domain == 0:
@@ -151,7 +166,7 @@ def main():
         else:
             color = np.random.randint(0, 5)/10
         print(color)
-        domain_results = []
+        results = []
         for i in range(args.num_episodes):
             episode_reward, done, obs = 0, False, env.reset()
             obs = process_obs(obs)
@@ -174,12 +189,12 @@ def main():
             results.append(episode_reward)
 
         print('Evaluate %d episodes and achieved %f scores in domain %d' % (args.num_episodes, np.mean(results), domain))
-        #file_name = "%s_%d_%s" % (args.env, args.num_episodes, 'results.txt')
         print(results)
-        #torch.save(results, os.path.join(args.save_path, file_name))
-        domain_results.append(results)
-    with open(os.path.join(args.save_path, 'eval_train_v2.py'), 'w') as f:
-        f.write('score = %s' % domain_results)
+        domains_results.append(results)
+        domains_means.append(np.mean(results))
+    with open(os.path.join(args.save_path, 'results_%s.txt' % args.policy_type), 'w') as f:
+        f.write('score = %s' % domains_results)
+        f.write('mean_scores = %s' % domains_means)
 
 if __name__ == '__main__':
     main()
