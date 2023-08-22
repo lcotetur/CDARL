@@ -26,7 +26,7 @@ parser.add_argument('--policy-type', default='end-to-end', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ppo.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_disent.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
@@ -45,10 +45,10 @@ def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
     return torch.from_numpy(obs).unsqueeze(0)
 
 ######## models ##########
-# Encoder download weights
-class EncoderD(nn.Module):
+# Encoder download weights invar
+class EncoderI(nn.Module):
     def __init__(self, latent_size = 32, input_channel = 3):
-        super(EncoderD, self).__init__()
+        super(EncoderI, self).__init__()
         self.latent_size = latent_size
         self.main = nn.Sequential(
             nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
@@ -63,6 +63,30 @@ class EncoderD(nn.Module):
         x = x.view(x.size(0), -1)
         mu = self.linear_mu(x)
         return mu
+
+# Encoder download weights disent
+class EncoderD(nn.Module):
+    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
+        super(EncoderD, self).__init__()
+
+        self.main = nn.Sequential(
+            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+        )
+
+        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
+        self.linear_logsigma = nn.Linear(flatten_size, content_latent_size)
+        self.linear_classcode = nn.Linear(flatten_size, class_latent_size)
+
+    def forward(self, x):
+        x = self.main(x)
+        x = x.view(x.size(0), -1)
+        mu = self.linear_mu(x)
+        logsigma = self.linear_logsigma(x)
+        classcode = self.linear_classcode(x)
+        return mu, logsigma, classcode
 
 # Encoder end-to-end
 class EncoderE(nn.Module):
@@ -91,6 +115,10 @@ class EncoderE(nn.Module):
         classcode = self.linear_classcode(x)
         return mu
 
+    def get_feature(self, x):
+        mu, logsigma, classcode = self.forward(x)
+        return mu
+
 class MyModel(nn.Module):
     def __init__(self, policy_type, deterministic_sample=False, latent_size=16):
         nn.Module.__init__(self)
@@ -101,10 +129,17 @@ class MyModel(nn.Module):
             latent_size = 16
             self.main = EncoderE(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
         
-        # evaluate policy not end-to-end
-        elif self.policy_type == 'download':
+        # evaluate policy invariant representation
+        elif self.policy_type == 'invar':
             latent_size = 32
-            self.main = EncoderD(latent_size=latent_size)
+            self.main = EncoderI(latent_size=latent_size)
+
+        # evaluate policy disentangled representation
+        elif self.policy_type == 'disent':
+            class_latent_size = 8
+            content_latent_size = 16
+            latent_size = class_latent_size + content_latent_size
+            self.main = EncoderD(class_latent_size, content_latent_size)
     
         # evaluate policy no encoder
         elif self.policy_type == 'ppo':
@@ -127,6 +162,9 @@ class MyModel(nn.Module):
             if self.policy_type == 'ppo':
                 x = self.cnn_base(x)
                 features = x.view(x.size(0), -1)
+            elif self.policy_type == 'disent':
+                content, _, style = self.main(x)
+                features = torch.cat([content, style], dim=1)
             else:
                 features = self.main(x)
             actor_features = self.actor(features)
