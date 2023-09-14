@@ -25,7 +25,10 @@ ray start --head --num-cpus=4 --object-store-memory=10000000000 --memory=2000000
 python train_lusr.py --data-dir data/carracing_data/  --data-tag car  --num-splitted 10 --beta 10 --class-latent-size 8  --content-latent-size 16  --flatten-size 1024   --num-epochs 2
 
 # ppo training on carracing games
-python main_carracing.py   --train-epochs 1000 --ray-adress 'localhost:20295'
+python main_carracing.py   --train-epochs 1000 --ray-adress 'localhost:52926'
+
+# agents training on carracing
+python train_agents.py   --train-epochs 1000 --ray-adress 'localhost:46773' --policy-type repr
 
 # evaluate the trained policy on carracing games
-python evaluate_carracing.py --model-path checkpoints/policy.pt  --num-episodes 100  --env CarRacing-v0conda activate LUSR
+python evaluate_carracing.py --model-path checkpoints/policy.pt  --num-episodes 100  --env CarRacing-v0
