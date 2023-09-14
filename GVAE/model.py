@@ -10,104 +10,88 @@ from utils import reparameterize
 # TRY IMPLEMENTATION OF MLVAE then from it modify it so it is a GVAE 
 
 # Models for carracing games
-class EncoderStyle(nn.Module):
-    def __init__(self, class_latent_size = 3, input_channel = 3, flatten_size = 1024):
-        super(EncoderStyle, self).__init__()
-        self.class_latent_size = class_latent_size
+class Encoder(nn.Module):
+    def __init__(self, style_dim = 8, class_dim = 16, input_channel = 3, flatten_size = 1024):
+        super(Encoder, self).__init__()
         self.flatten_size = flatten_size
 
         self.main = nn.Sequential(
-            nn.Conv2d(input_channel, 64, 5, stride=2, padding=2), nn.ReLU(),
-            nn.Conv2d(64, 64, 5, stride=2, padding=2), nn.ReLU(),
-            nn.Conv2d(64, 64, 5, stride=2, padding=2), nn.ReLU()
+            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
         )
 
-        self.linear_mu = nn.Sequential(nn.Linear(flatten_size, 128), nn.ReLU(), nn.Linear(128, class_latent_size))
-        self.linear_var = nn.Sequential(nn.Linear(flatten_size, 128), nn.ReLU(), nn.Linear(128, class_latent_size), nn.Softplus())
+        self.style_mu = nn.Linear(in_features=flatten_size, out_features=style_dim)
+        self.style_logvar = nn.Linear(in_features=flatten_size, out_features=style_dim)
+
+        # class
+        self.class_mu = nn.Linear(in_features=flatten_size, out_features=class_dim)
+        self.class_logvar = nn.Linear(in_features=flatten_size, out_features=class_dim)
 
     def forward(self, x):
         x = self.main(x)
         x = x.view(x.size(0), -1)
-        mu = self.linear_mu(x)
-        var = self.linear_var(x)
 
-        return mu, var
+        style_latent_space_mu = self.style_mu(x)
+        style_latent_space_logvar = self.style_logvar(x)
 
-    def get_feature(self, x):
-        mu, _ = self.forward(x)
-        return mu
+        class_latent_space_mu = self.class_mu(x)
+        class_latent_space_logvar = self.class_logvar(x)
 
-# Models for carracing games
-class EncoderContent(nn.Module):
-    def __init__(self, content_latent_size = 100, input_channel = 3, flatten_size = 1024):
-        super(EncoderContent, self).__init__()
-        self.content_latent_size = content_latent_size
-        self.flatten_size = flatten_size
-
-        self.main = nn.Sequential(
-            nn.Conv2d(input_channel, 64, 5, stride=2, padding=2), nn.ReLU(),
-            nn.Conv2d(64, 64, 5, stride=2, padding=2), nn.ReLU(),
-            nn.Conv2d(64, 64, 5, stride=2, padding=2), nn.ReLU()
-        )
-
-
-        self.linear_mu = nn.Sequential(nn.Linear(flatten_size, 128), nn.ReLU(), nn.Linear(128, content_latent_size))
-        self.linear_var = nn.Sequential(nn.Linear(flatten_size, 128), nn.ReLU(), nn.Linear(128, content_latent_size), nn.Softplus())
-
-    def forward(self, x):
-        x = self.main(x)
-        x = x.view(x.size(0), -1)
-        print(x.shape)
-        mu = self.linear_mu(x)
-        var = self.linear_var(x)
-
-        return mu, var
+        return style_latent_space_mu, style_latent_space_logvar, class_latent_space_mu, class_latent_space_logvar
 
     def get_feature(self, x):
-        mu, _ = self.forward(x)
+        _, _, mu, _ = self.forward(x)
         return mu
-
 
 class Decoder(nn.Module):
-    def __init__(self, latent_size = 103, output_channel = 3, flatten_size=1024):
+    def __init__(self, latent_size = 24, flatten_size=1024):
         super(Decoder, self).__init__()
 
         self.fc = nn.Linear(latent_size, flatten_size)
 
         self.main = nn.Sequential(
-            nn.ConvTranspose2d(flatten_size, 64, 6, stride=2, padding=2), nn.ReLU(),
-            nn.ConvTranspose2d(64, 64, 6, stride=2, padding=2), nn.ReLU(),
-            nn.ConvTranspose2d(64, 64, 6, stride=2, padding=2), nn.Sigmoid()
+            nn.ConvTranspose2d(flatten_size, 128, 5, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, 5, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, 6, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(32, 3, 6, stride=2), nn.Sigmoid()
         )
 
-    def forward(self, x):
+    def forward(self, style_latent_space, class_latent_space):
+        x = torch.cat((style_latent_space, class_latent_space), dim=1)
         x = self.fc(x)
         x = x.unsqueeze(-1).unsqueeze(-1)
-        print(x.shape)
         x = self.main(x)
         return x
-
  
 class GVAE(nn.Module):
-    def __init__(self, class_latent_size = 3, content_latent_size = 100, img_channel = 3, flatten_size = 1024):
+    def __init__(self, style_dim, class_dim, input_channel = 3, flatten_size = 1024):
         super(GVAE, self).__init__()
-        self.encoder_style = EncoderStyle(class_latent_size, img_channel, flatten_size)
-        self.encoder_content = EncoderContent(content_latent_size, img_channel, flatten_size)
-        self.decoder = Decoder(class_latent_size + content_latent_size, img_channel, flatten_size)
+        self.encoder = Encoder(style_dim, class_dim, input_channel, flatten_size)
+        latent_size = style_dim + class_dim
+        self.decoder = Decoder(latent_size, flatten_size)
+        self.apply(self._weights_init)
+
+    @staticmethod
+    def _weights_init(m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+            nn.init.constant_(m.bias, 0.1)
 
     def forward(self, x):
-        mu_s, logsigma_s = self.encoder_style(x)
-        mu_c, logsigma_c = self.encoder_content(x)
+        mu_s, logsigma_s, mu_c, logsigma_c = self.encoder(x)
+
+        mu = torch.sum(mu_c, dim=0)/10
+        var = torch.sum(torch.exp(logsigma_c), dim=0)/10
+        logvar = torch.log(var)
+        
+        mu = mu.repeat(mu_s.shape[0], 1)
+        logvar = logvar.repeat(logsigma_s.shape[0], 1)
 
         stylecode = reparameterize(mu_s, logsigma_s)
-        mu = torch.mean(mu_c, dim=0)
-        logsigma = torch.mean(logsigma_c, dim=0)
-        #change logsigma to variance
-        contentcode = reparameterize(mu, logsigma)
-        contentcode = contentcode.repeat(stylecode.shape[0], 1)
+        contentcode = reparameterize(mu, logvar)
 
-        latentcode = torch.cat([stylecode, contentcode], dim=1)
+        recon_x = self.decoder(stylecode, contentcode)
 
-        recon_x = self.decoder(latentcode)
-
-        return stylecode, contentcode, recon_x
+        return mu_s, logsigma_s, mu, logvar, recon_x

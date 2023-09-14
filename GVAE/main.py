@@ -24,8 +24,8 @@ parser.add_argument('--learning-rate', default=0.0001, type=float)
 parser.add_argument('--beta', default=10, type=int)
 parser.add_argument('--save-freq', default=1000, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
-parser.add_argument('--class-latent-size', default=8, type=int)
-parser.add_argument('--content-latent-size', default=16, type=int)
+parser.add_argument('--style-dim', default=8, type=int)
+parser.add_argument('--content-dim', default=16, type=int)
 parser.add_argument('--flatten-size', default=1024, type=int)
 args = parser.parse_args()
 
@@ -36,36 +36,19 @@ def updateloader(loader, dataset):
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     return loader
 
-def kl_loss(mu, var):
-    kl_loss = -0.5 * torch.sum(1 + torch.log(var) - mu.pow(2) - var)
+def kl_loss(mu, logsigma):
+    kl_loss = -0.5 * torch.sum(1 + logsigma - mu.pow(2) - logsigma.exp())
     return kl_loss
 
 def gvae_loss(x, model, beta=1):
-    mu_s, var_s = model.encoder_style(x)
-    mu_c, var_c = model.encoder_content(x)
-    #print((mu_s, var_s))
-    #print((mu_c, var_c))
-
-    stylecode = reparameterize(mu_s, var_s)
-
-    mu = torch.mean(mu_c, dim=0)
-    var = torch.mean(var_c, dim=0)
-    contentcode = reparameterize(mu, var)
-    contentcode = contentcode.repeat(stylecode.shape[0], 1)
-
-
-    latentcode = torch.cat([stylecode, contentcode], dim=1)
-
-
-    recon_x = model.decoder(latentcode)
-    #print(recon_x)
+    mu_s, logsigma_s, mu, logvar, recon_x = model(x)
 
     recon_loss = F.mse_loss(x, recon_x, reduction='mean')
-    style_loss = kl_loss(mu_s, var_s) / torch.numel(x)
-    content_loss = kl_loss(mu, var)
+    style_loss = kl_loss(mu_s, logsigma_s) / torch.numel(x)
+    content_loss = kl_loss(mu, logvar)
     #print((recon_loss, style_loss, content_loss))
 
-    return recon_loss - style_loss * beta - content_loss * beta
+    return recon_loss + (style_loss + content_loss) * beta
 
 
 def main():
@@ -82,7 +65,7 @@ def main():
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
     # create model
-    model = Model(class_latent_size = args.class_latent_size, content_latent_size = args.content_latent_size)
+    model = Model(style_dim = args.style_dim, class_dim = args.content_dim)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -122,25 +105,20 @@ def main():
                     rand_idx = torch.randperm(imgs.shape[0])
                     imgs1 = imgs[rand_idx[:9]]
                     imgs2 = imgs[rand_idx[-9:]]
-                    print(imgs1.shape)
-                    print(imgs2.shape)
                     with torch.no_grad():
-                        mu_s, var_s = model.encoder_style(imgs1)
-                        mu_c1, var_c1 = model.encoder_content(imgs1)
-                        mu_c2, var_c2 = model.encoder_content(imgs2)
-                        style_code = reparameterize(mu_s, var_s)
-                        content_code1 = reparameterize(mu_c1, var_c1)
-                        content_code2 = reparameterize(mu_c2, var_c2)
-                        #recon_imgs1 = model.decoder(torch.cat([style_code, content_code1], dim=1))
-                        recon_imgs1 = model.decoder(torch.cat([mu_s, mu_c1], dim=1))
-                        recon_imgs1 = model.decoder(torch.cat([style_code, content_code1], dim=1))
-                        recon_combined = model.decoder(torch.cat([mu_s, mu_c2], dim=1))
+                        mu_s, logsigma_s, mu, logvar, recon_x = model(imgs1)
+                        mu_s2, logsigma_s2, mu2, logvar2, recon_x2 = model(imgs2)
+                        style_code = reparameterize(mu_s, logsigma_s)
+                        contentcode1 = reparameterize(mu, logvar)
+                        contentcode2 = reparameterize(mu2, logvar2)
+                        recon_imgs1 = model.decoder(mu_s, mu)
+                        recon_combined = model.decoder(mu_s2, mu)
 
                     saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
                     save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/GVAE/checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=9)
 
                     torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/GVAE/checkpoints/model.pt")
-                    torch.save(model.encoder_content.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/GVAE/checkpoints/encoder.pt")
+                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/GVAE/checkpoints/encoder.pt")
 
             # load next splitted data
             updateloader(loader, dataset)
