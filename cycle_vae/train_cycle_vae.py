@@ -25,7 +25,7 @@ parser.add_argument('--beta', default=10, type=int)
 parser.add_argument('--save-freq', default=1000, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
 parser.add_argument('--class-latent-size', default=8, type=int)
-parser.add_argument('--content-latent-size', default=16, type=int)
+parser.add_argument('--content-latent-size', default=32, type=int)
 parser.add_argument('--flatten-size', default=1024, type=int)
 parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
 args = parser.parse_args()
@@ -107,14 +107,12 @@ def main():
         for i_split in range(args.num_splitted):
             for i_batch, imgs in enumerate(loader):
 
-                print(imgs)
-
                 batch_count += 1
                 # forward circle
                 # Try 
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
                 imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs = RandomTransform(imgs).apply_transformations(nb_class=5)
+                imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
                 #imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
                 optimizer.zero_grad()
 
@@ -123,7 +121,6 @@ def main():
                     # batch size 10 for each class (5 class)
                     image = imgs[i_class]
                     floss += forward_loss(image, model, args.beta)
-                    save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/lusr_class_%d.png" % (i_class))
                 floss = floss / imgs.shape[0] # divided by the number of classes
 
                 # backward circle
@@ -144,7 +141,6 @@ def main():
                 if i_batch % args.save_freq == 0:
                     print("%d Epochs, %d Splitted Data, %d Batches is Done." % (i_epoch, i_split, i_batch))
                     rand_idx = torch.randperm(imgs.shape[0])
-                    print(loss)
                     imgs1 = imgs[rand_idx[:9]]
                     imgs2 = imgs[rand_idx[-9:]]
                     with torch.no_grad():

@@ -280,8 +280,8 @@ class Agent():
     """
     max_grad_norm = 0.5
     clip_param = 0.1  # epsilon in clipped loss
-    ppo_epoch = 10
-    buffer_capacity, batch_size = 2000, 200
+    ppo_epoch = 20
+    buffer_capacity, batch_size = 2000, 128
     batch_size_vae = 100
 
     def __init__(self, args, results_vae, vae_batches, vae_epoch):
@@ -340,7 +340,7 @@ class Agent():
         for _ in range(100):
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
                 self.vae_batches += 1
-                imgs = torch.tensor(self.buffer['s'][index], dtype=torch.float).to(device, non_blocking=True)
+                imgs = s[index]
                 imgs = RandomTransform(imgs).apply_transformations(nb_class=10)
 
                 floss = 0
@@ -425,7 +425,7 @@ if __name__ == "__main__":
         episode_lenght = 0
         state = env.reset()
 
-        for t in range(2000):
+        for t in range(1000):
             action, a_logp = agent.select_action(state)
             state_, reward, done, die = env.step(action * np.array([2., 1., 1.]) + np.array([-1., 0., 0.]))
             if args.render:

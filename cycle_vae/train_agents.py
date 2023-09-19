@@ -201,6 +201,7 @@ class MyModel(TorchModelV2, nn.Module):
 
         # evaluate policy with end-to-end training
         if self.policy_type == 'end_to_end':
+            print('end-to-end')
             latent_size = 32
             self.main = EncoderE(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
 
@@ -217,6 +218,7 @@ class MyModel(TorchModelV2, nn.Module):
         
         # evaluate policy invariant representation
         elif self.policy_type == 'invar':
+            print('invariant')
             latent_size = 32
             self.main = EncoderI(latent_size=latent_size)
 
@@ -233,6 +235,7 @@ class MyModel(TorchModelV2, nn.Module):
 
         # evaluate policy entangle representation
         elif self.policy_type == 'repr':
+            print('entangle')
             latent_size = 32
             self.main = Encoder(latent_size=latent_size)
 
@@ -249,6 +252,7 @@ class MyModel(TorchModelV2, nn.Module):
 
         # evaluate policy disentangled representation
         elif self.policy_type == 'disent':
+            print('disentangle')
             class_latent_size = 8
             content_latent_size = 32
             latent_size = class_latent_size + content_latent_size
@@ -268,6 +272,7 @@ class MyModel(TorchModelV2, nn.Module):
     
         # evaluate policy no encoder
         elif self.policy_type == 'ppo'  or self.policy_type == 'augm':
+            print('ppo')
             latent_size = 2*2*256
             self.cnn_base = nn.Sequential(
                     nn.Conv2d(3, 32, 4, stride=2), nn.ReLU(),

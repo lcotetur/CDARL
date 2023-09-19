@@ -63,7 +63,7 @@ class RandomTransform():
     def __init__(self, imgs):
         self.imgs = imgs
 
-    def apply_transformations(self, nb_class=5):
+    def apply_transformations(self, nb_class=5, value=None):
         m = int(self.imgs.shape[0]/nb_class)
 
         transforms = []
@@ -73,18 +73,23 @@ class RandomTransform():
             if i == nb_class:
                 return torch.stack(transforms)
             elif(i != 0 and i != nb_class):
-                transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :]))
+                if value == None:
+                    transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :]))
+                else:
+                    transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value))
 
-    def domain_transformation(self, value=0.1):
+    def domain_transformation(self, value=0.5, blur=False):
         if value == None:
             return self.imgs
+        elif blur == True:
+            return self.jitter(self.random_blur(self.random_crop(self.imgs)), value)
         else:
             return self.jitter(self.imgs, value)
 
     def jitter(self, imgs, value):
         imgs = transforms.ColorJitter(hue=(value))(imgs)
         return imgs
-    
+
     def random_jitter(self, imgs):
         imgs = transforms.ColorJitter(hue=(-0.5,0.5))(imgs)
         return imgs

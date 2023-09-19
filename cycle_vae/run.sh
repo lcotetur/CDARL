@@ -21,14 +21,20 @@ Xvfb :1 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &> xvfb.log & 
 # ray connection - only if running main_carracing
 ray start --head --num-cpus=4 --object-store-memory=10000000000 --memory=20000000000
 
-# train lusr for carracing games
-python train_lusr.py --data-dir data/carracing_data/  --data-tag car  --num-splitted 10 --beta 10 --class-latent-size 8  --content-latent-size 16  --flatten-size 1024   --num-epochs 2
+# train cycle-vae for carracing games
+python train_cycle_vae.py 
+
+# train vae for carracing games
+python train_vae.py --augmentation True
 
 # ppo training on carracing games
-python main_carracing.py   --train-epochs 1000 --ray-adress 'localhost:52926'
+python ppo_agent_stack.py
+
+# evaluate ppo agent on carracing games
+python evaluate_stack.py --policy-type ppo
 
 # agents training on carracing
-python train_agents.py   --train-epochs 1000 --ray-adress 'localhost:46773' --policy-type repr
+python train_agents.py  --train-epochs 1000 --ray-adress 'localhost:16583' --policy-type disent --encoder-path /home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder.pt --model-save-path /home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_disent.pt
 
-# evaluate the trained policy on carracing games
-python evaluate_carracing.py --model-path checkpoints/policy.pt  --num-episodes 100  --env CarRacing-v0
+# evaluate the trained agents on carracing games
+python evaluate.py --policy-type disent --model-path /home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_disent.pt

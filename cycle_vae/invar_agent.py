@@ -112,7 +112,7 @@ class Env():
         return memory
 
 class Encoder(nn.Module):
-    def __init__(self, content_size = 16, input_channel = 3):
+    def __init__(self, content_size = 32, input_channel = 3):
         super(Encoder, self).__init__()
         self.content_size = content_size
         self.main = nn.Sequential(
@@ -180,7 +180,7 @@ class Agent():
     max_grad_norm = 0.5
     clip_param = 0.1  # epsilon in clipped loss
     ppo_epoch = 10
-    buffer_capacity, batch_size = 2000, 200
+    buffer_capacity, batch_size = 2000, 128 #Changes batch size from 200 to 128
 
     def __init__(self, args):
         self.training_step = 0
@@ -274,13 +274,12 @@ if __name__ == "__main__":
         episode_lenght = 0
         state = env.reset()
 
-        for t in range(2000):
+        for t in range(1000):
             action, a_logp = agent.select_action(state)
             state_, reward, done, die = env.step(action * np.array([2., 1., 1.]) + np.array([-1., 0., 0.]))
             if args.render:
                 env.render()
             if agent.store((state, action, a_logp, reward, state_)):
-                print('updating')
                 agent.update()
             score += reward
             state = state_

@@ -26,7 +26,7 @@ parser.add_argument('--policy-type', default='end-to-end', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_disent.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_invar.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
@@ -38,7 +38,7 @@ args = parser.parse_args()
 
 
 ######## obs preprocess ###########
-def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
+def process_obs(obs): # input single frame (96, 96, 3) for CarRacing
     obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
     obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
     obs = np.transpose(obs, (2,0,1))
@@ -88,6 +88,30 @@ class EncoderD(nn.Module):
         classcode = self.linear_classcode(x)
         return mu, logsigma, classcode
 
+# Encoder download weights vae
+class Encoder(nn.Module):
+    def __init__(self, latent_size = 32, input_channel = 3, flatten_size = 1024):
+        super(Encoder, self).__init__()
+        self.latent_size = latent_size
+
+        self.main = nn.Sequential(
+            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+        )
+
+        self.linear_mu = nn.Linear(flatten_size, latent_size)
+        self.linear_logsigma = nn.Linear(flatten_size, latent_size)
+
+    def forward(self, x):
+        x = self.main(x)
+        x = x.view(x.size(0), -1)
+        mu = self.linear_mu(x)
+        logsigma = self.linear_logsigma(x)
+
+        return mu, logsigma
+
 # Encoder end-to-end
 class EncoderE(nn.Module):
     def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
@@ -134,6 +158,11 @@ class MyModel(nn.Module):
             latent_size = 32
             self.main = EncoderI(latent_size=latent_size)
 
+        # evaluate policy entangle representation
+        elif self.policy_type == 'repr':
+            latent_size = 32
+            self.main = Encoder(latent_size=latent_size)
+
         # evaluate policy disentangled representation
         elif self.policy_type == 'disent':
             class_latent_size = 8
@@ -142,7 +171,7 @@ class MyModel(nn.Module):
             self.main = EncoderD(class_latent_size, content_latent_size)
     
         # evaluate policy no encoder
-        elif self.policy_type == 'ppo':
+        elif self.policy_type == 'ppo' or self.policy_type == 'augm':
             latent_size = 2*2*256
             self.cnn_base = nn.Sequential(
                     nn.Conv2d(3, 32, 4, stride=2), nn.ReLU(),
@@ -159,12 +188,14 @@ class MyModel(nn.Module):
 
     def forward(self, x):
         with torch.no_grad():
-            if self.policy_type == 'ppo':
+            if self.policy_type == 'ppo' or self.policy_type == 'augm':
                 x = self.cnn_base(x)
                 features = x.view(x.size(0), -1)
             elif self.policy_type == 'disent':
                 content, _, style = self.main(x)
                 features = torch.cat([content, style], dim=1)
+            elif self.policy_type == 'repr':
+                features, _, = self.main(x)
             else:
                 features = self.main(x)
             actor_features = self.actor(features)
@@ -199,19 +230,21 @@ def main():
 
     domains_results = []
     domains_means = []
+    blur = False
 
     for domain in range(args.nb_domain):
         if domain == 0:
             color = None
+        elif domain == args.nb_domain - 1:
+            blur = True
         else:
-            color = np.random.randint(0, 5)/10
-        print(color)
+            color = np.random.randint(4, 5)/10
+        print(color, blur)
         results = []
         for i in range(args.num_episodes):
             episode_reward, done, obs = 0, False, env.reset()
             obs = process_obs(obs)
-            new_obs = RandomTransform(obs).domain_transformation(color)
-            save_image(new_obs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/obs_%d.png" % (domain))
+            new_obs = RandomTransform(obs).domain_transformation(color, blur)
             video.init(enabled=((i == 0) or (i == 99)))
             while not done:
                 action = model(new_obs)
@@ -224,7 +257,8 @@ def main():
                 if args.render:
                     env.render()
                 obs = process_obs(obs)
-                new_obs = RandomTransform(obs).domain_transformation(color)
+                new_obs = RandomTransform(obs).domain_transformation(color, blur)
+                save_image(new_obs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/obs_%d.png" % (domain))
             video.save('%d_%d.mp4' % (domain, i))
             results.append(episode_reward)
 

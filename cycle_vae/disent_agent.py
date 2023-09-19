@@ -19,10 +19,10 @@ import time
 
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
 parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_offline.pt')
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder.pt')
 parser.add_argument('--train-encoder', default=False, type=bool)
 parser.add_argument('--learning-rate', default=0.0002, type=float)
-parser.add_argument('--content-size', default=16, type=int)
+parser.add_argument('--content-size', default=32, type=int)
 parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
 parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
@@ -32,7 +32,7 @@ parser.add_argument('--num_workers', default=4, type=int)
 parser.add_argument('--entropy_coef', default=.01, type=float)
 parser.add_argument('--value_loss_coef', default=2., type=float)
 parser.add_argument('--class-latent-size', default=8, type=int)
-parser.add_argument('--content-latent-size', default=16, type=int)
+parser.add_argument('--content-latent-size', default=32, type=int)
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
@@ -59,7 +59,7 @@ class Env():
         self.env.seed(args.seed)
         self.reward_threshold = self.env.spec.reward_threshold
 
-    def process_obs(self, obs): # a single frame (96, 96, 3) for CarRacing
+    def process_obs(self, obs):
         obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
         obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
         return np.transpose(obs, (2,0,1))
@@ -72,6 +72,18 @@ class Env():
         img_rgb = self.env.reset()
         processed_obs = self.process_obs(img_rgb)
         return processed_obs
+        '''
+        save_image(torch.tensor(processed_obs.copy(), dtype=torch.float32), "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/preprocesss_ppo_carracing.png", nrow=12)
+        #img_gray = self.rgb2gray(processed_obs)
+        self.stack = [processed_obs] * args.img_stack
+        img = np.concatenate(self.stack, axis=0)
+        #print(np.array(self.stack).shape)
+        #print(np.array(self.stack).reshape(12, 64, 64).shape)   # four frames for decision
+        #return np.array(self.stack).reshape(12, 64, 64)
+        return img
+        '''
+        
+        #return processed_obs
 
     def step(self, action):
         total_reward = 0
@@ -89,6 +101,14 @@ class Env():
             if done or die:
                 break
         img_rgb = self.process_obs(img_rgb)
+        '''
+        #img_gray = self.rgb2gray(img_rgb)
+        self.stack.pop(0)
+        self.stack.append(img_rgb)
+        assert len(self.stack) == args.img_stack
+        img_rgb = np.array(self.stack).reshape(12, 64, 64)
+        #return np.array(self.stack), total_reward, done, die
+        '''
         return img_rgb, total_reward, done, die
 
     def render(self, *arg):
@@ -119,7 +139,7 @@ class Env():
         return memory
 
 class Encoder(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
         super(Encoder, self).__init__()
 
         self.main = nn.Sequential(
@@ -142,7 +162,7 @@ class Encoder(nn.Module):
         return mu, logsigma, classcode
 
 class ActorCriticNet(nn.Module):
-    def __init__(self, args, latent_size=24):
+    def __init__(self, args, latent_size=40):
         nn.Module.__init__(self)
         self.latent_size = args.content_latent_size + args.class_latent_size
         self.main = Encoder()  
@@ -174,7 +194,20 @@ class ActorCriticNet(nn.Module):
             style = style.detach()  # not train the encoder
 
         features = torch.cat([content, style], dim=1)
-
+        '''
+        # input shape (Batch, 12, 64, 64)
+        input = input.reshape(input.shape[0], 4, 3, 64, 64)
+        # input shape (Batch, 4, 3, 64, 64)
+        features = []
+        for frame in range(args.img_stack):
+            content, _, style = self.main(input[0][frame].float().unsqueeze(0))
+            if not self.train_encoder:
+                content = content.detach()
+                style = style.detach()  # not train the encoder
+            feature = torch.cat([content, style], dim=1)
+            features.append(feature)
+        features = torch.cat(features, dim=1)
+        '''
         v = self.critic(features)
         actor_features = self.actor(features)
         alpha = self.alpha_head(actor_features) + 1
@@ -210,7 +243,7 @@ class Agent():
     max_grad_norm = 0.5
     clip_param = 0.1  # epsilon in clipped loss
     ppo_epoch = 10
-    buffer_capacity, batch_size = 2000, 200
+    buffer_capacity, batch_size = 2000, 128
 
     def __init__(self, args):
         self.training_step = 0
@@ -227,7 +260,6 @@ class Agent():
         dist = Beta(alpha, beta)
         action = dist.sample()
         a_logp = dist.log_prob(action).sum(dim=1)
-
         action = action.squeeze().cpu().numpy()
         a_logp = a_logp.item()
         return action, a_logp
@@ -263,7 +295,6 @@ class Agent():
         print('updating agent')
         for _ in range(self.ppo_epoch):
             for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size, False):
-
                 alpha, beta = self.net(s[index])[0]
                 dist = Beta(alpha, beta)
                 a_logp = dist.log_prob(a[index]).sum(dim=1, keepdim=True)
@@ -304,13 +335,12 @@ if __name__ == "__main__":
         episode_lenght = 0
         state = env.reset()
 
-        for t in range(2000):
+        for t in range(1000):
             action, a_logp = agent.select_action(state)
             state_, reward, done, die = env.step(action * np.array([2., 1., 1.]) + np.array([-1., 0., 0.]))
             if args.render:
                 env.render()
             if agent.store((state, action, a_logp, reward, state_)):
-                print('updating')
                 agent.update()
             score += reward
             state = state_

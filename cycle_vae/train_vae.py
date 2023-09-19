@@ -26,6 +26,7 @@ parser.add_argument('--save-freq', default=1000, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
 parser.add_argument('--latent-size', default=32, type=int)
 parser.add_argument('--flatten-size', default=1024, type=int)
+parser.add_argument('--random-augmentations', default=False, type=bool)
 parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
 args = parser.parse_args()
 
@@ -78,8 +79,10 @@ def main():
                 batch_count += 1
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
                 imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs = RandomTransform(imgs).apply_transformations(nb_class=5)
-                imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
+                if args.random_augmentations == True:
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
+                    imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
+                save_image(imgs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/see_transform.png")
 
                 optimizer.zero_grad()
                 loss = compute_loss(imgs, model, args.beta)
@@ -97,11 +100,9 @@ def main():
                     imgs = imgs[rand_idx[:9]]
                     with torch.no_grad():
                         mu, logsigma = model.encoder(imgs)
-                        latentcode = reparameterize(mu, logsigma)
                         recon_imgs1 = model.decoder(mu)
-                        recon_imgs2 = model.decoder(latentcode)
 
-                    saved_imgs = torch.cat([imgs, recon_imgs1, recon_imgs2], dim=0)
+                    saved_imgs = torch.cat([imgs, recon_imgs1], dim=0)
                     save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/vae_%d_%d_%d.png" % (i_epoch, i_split, i_batch), nrow=9)
 
                     torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/model_vae.pt")
