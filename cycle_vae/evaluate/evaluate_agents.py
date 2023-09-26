@@ -26,7 +26,7 @@ parser.add_argument('--policy-type', default='end-to-end', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_invar.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_disent.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
@@ -163,10 +163,15 @@ class MyModel(nn.Module):
             latent_size = 32
             self.main = Encoder(latent_size=latent_size)
 
+        # evaluate policy invariant representation
+        elif self.policy_type == 'adagvae':
+            latent_size = 16
+            self.main = Encoder(latent_size=latent_size)
+
         # evaluate policy disentangled representation
         elif self.policy_type == 'disent':
             class_latent_size = 8
-            content_latent_size = 16
+            content_latent_size = 32
             latent_size = class_latent_size + content_latent_size
             self.main = EncoderD(class_latent_size, content_latent_size)
     
@@ -194,7 +199,7 @@ class MyModel(nn.Module):
             elif self.policy_type == 'disent':
                 content, _, style = self.main(x)
                 features = torch.cat([content, style], dim=1)
-            elif self.policy_type == 'repr':
+            elif self.policy_type == 'repr' or self.policy_type == 'adagvae':
                 features, _, = self.main(x)
             else:
                 features = self.main(x)

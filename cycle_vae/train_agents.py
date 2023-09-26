@@ -24,8 +24,8 @@ parser.add_argument('--policy-type', default='end-to-end', type=str)
 parser.add_argument('--ray-adress', default='auto', type=str)
 parser.add_argument('--save-freq', default=10, type=int)
 parser.add_argument('--train-epochs', default=5000, type=int)
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_vae.pt')
-parser.add_argument('--model-save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_repr.pt', type=str)
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/ADAGVAE/checkpoints/encoder_adagvae.pt')
+parser.add_argument('--model-save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ada.pt', type=str)
 parser.add_argument('--train-encoder', default=False, type=bool)
 parser.add_argument('--num-workers', default=1, type=int)
 parser.add_argument('--num-envs-per-worker', default=2, type=int)
@@ -52,8 +52,6 @@ args = parser.parse_args()
 #def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
     #obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
     #return np.transpose(obs, (2,0,1))
-
-# TO DO: CHANGE PREPROCESS FOR AUGMENTED POLICY
 
 def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
     obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
@@ -233,6 +231,23 @@ class MyModel(TorchModelV2, nn.Module):
             else:
                 print("No Load Weights")
 
+        # evaluate policy invariant representation
+        elif self.policy_type == 'adagvae':
+            print('adagvae')
+            latent_size = 32
+            self.main = Encoder(latent_size=latent_size)
+
+            if custom_config['encoder_path'] is not None:
+                # saved checkpoints could contain extra weights such as linear_logsigma 
+                weights = torch.load(custom_config['encoder_path'], map_location=torch.device('cpu'))
+                for k in list(weights.keys()):
+                    if k not in self.main.state_dict().keys():
+                        del weights[k]
+                self.main.load_state_dict(weights)
+                print("Loaded Weights")
+            else:
+                print("No Load Weights")
+
         # evaluate policy entangle representation
         elif self.policy_type == 'repr':
             print('entangle')
@@ -322,6 +337,10 @@ class MyModel(TorchModelV2, nn.Module):
             if not self.train_encoder:
                 features = features.detach() 
         elif self.policy_type == 'repr':
+            features, _, = self.main(input_dict['obs'].float())
+            if not self.train_encoder:
+                features = features.detach() 
+        elif self.policy_type == 'adagvae':
             features, _, = self.main(input_dict['obs'].float())
             if not self.train_encoder:
                 features = features.detach() 
