@@ -43,4 +43,4 @@ python evaluate_stack.py --policy-type ppo
 python train_agents.py  --train-epochs 1000 --ray-adress 'localhost:51086' --policy-type adagvae --encoder-path /home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_adagvae_32.pt --model-save-path /home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_adagvae_32.pt
 
 # evaluate the trained agents on carracing games
-python evaluate.py --policy-type adagvae --model-path /home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_adagvae_32.pt
+python evaluate/evaluate_agents.py --policy-type adagvae --model-path /home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_adagvae_32.pt

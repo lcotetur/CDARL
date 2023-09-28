@@ -10,7 +10,7 @@ import numpy as np
 import argparse
 import os
 
-from utils import ExpDataset, reparameterize, RandomTransform
+from CDARL.utils import ExpDataset, reparameterize, RandomTransform
 from weak_vae import ADAGVAE, compute_loss
 
 parser = argparse.ArgumentParser()

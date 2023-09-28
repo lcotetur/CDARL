@@ -1,39 +1,35 @@
-import numpy as np
 import torch
-import argparse
-import time
-import os
-import json
-
-from metrics import gaussian_total_correlation, gaussian_wasserstein_correlation, gaussian_wasserstein_correlation_norm
-from metrics import compute_mig, mutual_information_score
-from LUSR.utils import ExpDataset, reparameterize, RandomTransform
+from torch import optim
 import torch.nn as nn
 from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader
+import json
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from torchvision.utils import save_image
 
+import numpy as np
+import argparse
+import os
+
+from metrics import gaussian_total_correlation, gaussian_wasserstein_correlation, gaussian_wasserstein_correlation_norm
+from metrics import compute_mig, mutual_information_score, compute_dci
+from CDARL.data.shapes3d_data import Shape3dDataset, process_obs
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/carracing_data', type=str, help='path to the data')
-parser.add_argument('--data-tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
-parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
-parser.add_argument('--batch-size', default=10, type=int)
+parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/3dshapes.h5', type=str)
+parser.add_argument('--batch-size', default=16, type=int)
+parser.add_argument('--num-train', default=10000, type=int)
+parser.add_argument('--num-test', default=5000, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
-parser.add_argument('--encoder-type', default='vae', type=str)
+parser.add_argument('--encoder-type', default='adagvae', type=str)
 parser.add_argument('--num-episodes', default=1, type=int)
-parser.add_argument('--eval_steps', default=100, type=int)
-parser.add_argument('--supervised-scores', default=False, type=bool)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/model_vae.pt', type=str)
-parser.add_argument('--latent-size', default=32, type=int)
+parser.add_argument('--eval-steps', default=2, type=int)
+parser.add_argument('--supervised', default=True, type=bool)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/ADAGVAE/checkpoints/model_3dshapes.pt', type=str)
+parser.add_argument('--latent-size', default=12, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
 parser.add_argument('--work-dir', default='/home/mila/l/lea.cote-turcotte/LUSR', type=str)
 args = parser.parse_args()
-
-def updateloader(loader, dataset):
-    dataset.loadnext()
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    return loader
 
 def reconstruction_loss(x, recon_x):
     recon_loss = F.mse_loss(x, recon_x, reduction='mean')
@@ -184,79 +180,55 @@ class MyModel(nn.Module):
         return features, recon
 
 def evaluate():
-    """Loads a representation TFHub module and computes disentanglement metrics.
-
-    Args:
-        model_path: String with path to directory where the representation function
-        is saved.
-        save_path: String with the path where the results should be saved.
-        encoder_type: String with the representation type.
-        data_dir: String with the path to the data
-        evaluation_fn: Function used to evaluate the representation (see metrics/
-        for examples).
-        random_seed: Integer with random seed used for training.
-        name: Optional string with name of the metric (can be used to name metrics).
-    """
     model = MyModel(args.encoder_type)
     weights = torch.load(args.model_path, map_location=torch.device('cpu'))
     model.load_state_dict(weights)
     device = torch.device('cpu')
 
-    # create dataset and loader
-    transform = transforms.Compose([transforms.ToTensor()])
-    dataset = ExpDataset(args.data_dir, args.data_tag, args.num_splitted, transform)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    # create dataset
+    dataset = Shape3dDataset()
+    dataset.load_dataset(file_dir=args.data_dir)
     print('data loaded')
 
     results = {}
-    results_mean = {}
     results['recon_loss'] = []
     results['mig_score'] = []
+    results['dci_disent_score'] = []
     results['gaussian_total_corr'] = []
     results['gaussian_wasserstein_corr'] = []
     results['mututal_info_score'] = []
-    for i_batch, imgs in enumerate(loader):
-        imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
-        imgs = imgs.reshape(-1, *imgs.shape[2:])
-        imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=None)
-        imgs = imgs.reshape(-1, *imgs.shape[2:])
 
-        features, recon = model(imgs)
+    features, _ = dataset.generate_batch_factor_code(model, num_points=args.num_train, batch_size=args.batch_size)
 
-        recon_loss = reconstruction_loss(imgs, recon)
-        results['recon_loss'].append(recon_loss.item())
+    img_batch = dataset.sample_random_batch(args.num_train)
+    img_batch = process_obs(img_batch, device)
+    features, recon = model(img_batch)
+    recon_loss = reconstruction_loss(img_batch, recon)
+    results['recon_loss'].append(recon_loss.item())
 
-        features = features.transpose(0, 1).numpy() # from [50, 16] to [16, 50]
+    gaussian_total_corr = gaussian_total_correlation(features)
+    results['gaussian_total_corr'].append(gaussian_total_corr)
 
-        if args.supervised_scores == True:
-            mig_score = compute_mig(features, ground_truth_factor, num_train=50)
-            results['mig_score'].append(mig_score)
+    gaussian_wasserstein_corr = gaussian_wasserstein_correlation(features)
+    results['gaussian_wasserstein_corr'].append(gaussian_wasserstein_corr)
 
-        gaussian_total_corr = gaussian_total_correlation(features)
-        results['gaussian_total_corr'].append(gaussian_total_corr)
+    mututal_info_score = mutual_information_score(features)
+    results['mututal_info_score'].append(mututal_info_score)
 
-        gaussian_wasserstein_corr = gaussian_wasserstein_correlation(features)
-        results['gaussian_wasserstein_corr'].append(gaussian_wasserstein_corr)
+    saved_imgs = torch.cat([img_batch[:10], recon[:10]], dim=0)
+    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/evaluate/3dshapes_%s.png" % (args.encoder_type))
 
-        mututal_info_score = mutual_information_score(features)
-        results['mututal_info_score'].append(mututal_info_score)
+    if args.supervised == True:
+        mig_score = compute_mig(dataset, model, num_train=args.num_train, batch_size=args.batch_size)
+        results['mig_score'].append(mig_score["discrete_mig"])
 
-        saved_imgs = torch.cat([imgs, recon], dim=0)
-        save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/evaluate/%s.png" % (args.encoder_type))
+        dci_score = compute_dci(dataset, model, num_train=args.num_train, num_test=args.num_test, batch_size=args.batch_size)
+        results['dci_disent_score'].append(dci_score["disentanglement"])
 
-        if i_batch == args.eval_steps:
-            total_score_gauss = np.mean(results['gaussian_total_corr'])
-            print('Evaluate %d batches and achieved %f gaussian total correlation scores' % (i_batch, total_score_gauss))
-            results_mean['recon_loss_mean'] = np.mean(results['recon_loss'])
-            if args.supervised_scores == True:
-                results_mean['mig_score_mean'] = np.mean(results['mig_score'])
-            results_mean['gaussian_total_corr_mean'] = total_score_gauss
-            results_mean['gaussian_wasserstein_corr_mean'] = np.mean(results['gaussian_wasserstein_corr'])
-            results_mean['mututal_info_score_mean'] = np.mean(results['mututal_info_score'])
-            print(results_mean)
-            break
-    with open(os.path.join(args.save_path, 'results_%s.json' % args.encoder_type), 'w') as f:
-        json.dump({'results': results, 'results_mean': results_mean}, f)
+    print('Evaluate %d step and achieved %f gaussian total correlation scores' % (args.num_train, results['gaussian_total_corr']))
+    print(results)
+    with open(os.path.join(args.save_path, 'results_3dshapes_%s.json' % args.encoder_type), 'w') as f:
+        json.dump({'results': results}, f)
 
 if __name__ == '__main__':
     evaluate()

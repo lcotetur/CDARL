@@ -10,8 +10,8 @@ import numpy as np
 import argparse
 import os
 
-from utils import ExpDataset, reparameterize, RandomTransform
-from model import VAE
+from CDARL.utils import ExpDataset, reparameterize, RandomTransform
+from cycle_vae import VAE
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/carracing_data', type=str, help='path to the data')

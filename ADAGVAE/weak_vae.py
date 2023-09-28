@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import reparameterize
+from CDARL.utils import reparameterize
 
 class Encoder(nn.Module):
     def __init__(self, latent_size = 32, input_channel = 3, flatten_size = 1024):
@@ -21,7 +21,7 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         x = self.main(x)
-        x = x.view(x.size(0), -1)
+        x = x.reshape(x.size(0), -1)
         mu = self.linear_mu(x)
         logsigma = self.linear_logsigma(x)
 
@@ -125,15 +125,6 @@ def create_mask(x):
     for i, item in enumerate(x):
         index.append(torch.le(item, sep[i]))
     return torch.stack(index)
-
-    '''
-    replace tensorflow version
-    mask = tf.equal(
-      tf.map_fn(discretize_in_bins, kl_per_point, tf.int32),1) 
-        
-    def discretize_in_bins(x):
-          return tf.histogram_fixed_width_bins(x, [tf.reduce_min(x), tf.reduce_max(x)], nbins=2)
-    '''
 
 def kl_loss(z_mean, z_logvar):
     """Compute KL divergence between input Gaussian and Standard Normal."""
