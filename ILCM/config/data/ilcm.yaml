@@ -1,0 +1,6 @@
+name: 3dshapes
+data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5'
+
+dim_x: [3, 64, 64]
+dim_z: 4
+noise: 0

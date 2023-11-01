@@ -1,0 +1,7 @@
+defaults:
+  - general: ilcm
+  - data: ilcm
+  - model: ilcm
+  - training: ilcm
+  - hydra
+  - _self_  # Ensures that entries in this file overwrite everything references above, even in hydra <= 1.0
