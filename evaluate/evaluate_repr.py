@@ -6,8 +6,8 @@ import os
 import json
 
 from metrics import gaussian_total_correlation, gaussian_wasserstein_correlation, gaussian_wasserstein_correlation_norm
-from metrics import compute_mig, mutual_information_score
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform
+from metrics import compute_mig, mutual_information_score, compute_dci
+from LUSR.utils import ExpDataset, reparameterize, RandomTransform
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
@@ -23,7 +23,7 @@ parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--encoder-type', default='vae', type=str)
 parser.add_argument('--num-episodes', default=1, type=int)
 parser.add_argument('--eval_steps', default=100, type=int)
-parser.add_argument('--supervised-scores', default=False, type=bool)
+parser.add_argument('--supervised', default=False, type=bool)
 parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/model_vae.pt', type=str)
 parser.add_argument('--latent-size', default=32, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
@@ -212,6 +212,7 @@ def evaluate():
     results_mean = {}
     results['recon_loss'] = []
     results['mig_score'] = []
+    results['dci_score'] = []
     results['gaussian_total_corr'] = []
     results['gaussian_wasserstein_corr'] = []
     results['mututal_info_score'] = []
@@ -228,9 +229,12 @@ def evaluate():
 
         features = features.transpose(0, 1).numpy() # from [50, 16] to [16, 50]
 
-        if args.supervised_scores == True:
+        if args.supervised == True:
             mig_score = compute_mig(features, ground_truth_factor, num_train=50)
             results['mig_score'].append(mig_score)
+
+            dci_score = compute_dci(ground_truth_data, model, random_state, num_train, num_test, batch_size=16)
+            results['dci_score'].append(dci_score)
 
         gaussian_total_corr = gaussian_total_correlation(features)
         results['gaussian_total_corr'].append(gaussian_total_corr)
@@ -248,8 +252,9 @@ def evaluate():
             total_score_gauss = np.mean(results['gaussian_total_corr'])
             print('Evaluate %d batches and achieved %f gaussian total correlation scores' % (i_batch, total_score_gauss))
             results_mean['recon_loss_mean'] = np.mean(results['recon_loss'])
-            if args.supervised_scores == True:
+            if args.supervised == True:
                 results_mean['mig_score_mean'] = np.mean(results['mig_score'])
+                results_mean['dci_score_mean'] = np.mean(results['dci_score'])
             results_mean['gaussian_total_corr_mean'] = total_score_gauss
             results_mean['gaussian_wasserstein_corr_mean'] = np.mean(results['gaussian_wasserstein_corr'])
             results_mean['mututal_info_score_mean'] = np.mean(results['mututal_info_score'])

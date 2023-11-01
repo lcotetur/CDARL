@@ -9,22 +9,22 @@ import numpy as np
 import argparse
 import os
 
-from LUSR.data.shapes3d_data import Shape3dDataset
-from LUSR.utils import reparameterize
-from cycle_vae import DisentangledVAE
+from CDARL.data.shapes3d_data import Shape3dDataset
+from utils import reparameterize
+from model import DisentangledVAE
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/3dshapes.h5', type=str)
-parser.add_argument('--batch-size', default=50, type=int)
-parser.add_argument('--nb_groups', default=5, type=int)
+parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
+parser.add_argument('--batch-size', default=32, type=int)
+parser.add_argument('--nb-groups', default=2, type=int)
 parser.add_argument('--num-epochs', default=10000, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--learning-rate', default=0.0001, type=float)
 parser.add_argument('--beta', default=1, type=int)
-parser.add_argument('--save-freq', default=1000, type=int)
+parser.add_argument('--save-freq', default=100, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
-parser.add_argument('--class-latent-size', default=8, type=int)
-parser.add_argument('--content-latent-size', default=32, type=int)
+parser.add_argument('--class-latent-size', default=8, type=int) # 4
+parser.add_argument('--content-latent-size', default=16, type=int) # 8
 parser.add_argument('--flatten-size', default=1024, type=int)
 args = parser.parse_args()
 
@@ -84,7 +84,7 @@ def main():
     dataset.load_dataset(file_dir=args.data_dir)
 
     # create model
-    model = Model(latent_size = args.latent_size)
+    model = Model(class_latent_size = args.class_latent_size, content_latent_size = args.content_latent_size)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -93,7 +93,7 @@ def main():
     writer = SummaryWriter()
     batch_count = 0
     for i_epoch in range(args.num_epochs):
-        groups_size = args.batch_size / args.nb_groups
+        groups_size = int(args.batch_size / args.nb_groups)
         imgs = dataset.create_cycle_vae_batch(args.nb_groups, groups_size, device) # torch.Size([5, 10, 3, 64, 64])
         batch_count += args.batch_size
 
@@ -108,6 +108,7 @@ def main():
 
         # backward circle
         imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
+        save_image(imgs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/cycle_vae_groups_3dshapes.png", nrow=10)
         # batch of 50 imagees with mix classes
         bloss = backward_loss(imgs, model, device)
 
@@ -133,10 +134,10 @@ def main():
                 recon_combined = model.decoder(torch.cat([mu, classcode2], dim=1))
 
             saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/%d_%d.png" % (i_epoch, batch_count), nrow=10)
+            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/%d_%d.png" % (i_epoch, batch_count), nrow=10)
 
-            torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/model_cvae_3dshapes.pt")
-            torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_cvae_3dshapes.pt")
+            torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/model_cvae_3dshapes.pt")
+            torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/encoder_cvae_3dshapes.pt")
 
     writer.close()
 

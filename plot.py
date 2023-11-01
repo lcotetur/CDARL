@@ -35,10 +35,10 @@ def generate_plot(title, xlabel, ylabel, logdir, save_path):
 
 
 if __name__ == "__main__":
-    results_avg = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="disentangle_repr_running_score")
-    results_mean = Resutls(title="episode reward mean", xlabel="episode", ylabel="disentangle_repr_episode_score")
-    results_avg.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/4', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
-    results_mean.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/4', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
+    results_avg = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="ppo_running_score")
+    results_mean = Resutls(title="episode reward mean", xlabel="episode", ylabel="ppo_episode_score")
+    results_avg.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/8', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
+    results_mean.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/8', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
     #results_cycle_vae = Resutls(title="Cycle Consistent VAE loss", xlabel="vae_epoch", ylabel="loss")
     #results_cycle_vae.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/2', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
-    #generate_plot('main carracing moving averaged ep reward', "training_iteration", "episode_reward_mean", '/home/mila/l/lea.cote-turcotte/ray_results/disent_repr_myenv_2023-08-08_10-18-00wj85pq4k', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
+    #generate_plot('adagvae moving averaged ep reward', "training_iteration", "episode_reward_mean", '/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-09-22_08-53-39hqvly_cp_adagvae', '/home/mila/l/lea.cote-turcotte/LUSR/figures')

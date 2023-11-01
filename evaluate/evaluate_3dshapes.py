@@ -13,22 +13,22 @@ import os
 
 from metrics import gaussian_total_correlation, gaussian_wasserstein_correlation, gaussian_wasserstein_correlation_norm
 from metrics import compute_mig, mutual_information_score, compute_dci
-from CDARL.data.shapes3d_data import Shape3dDataset, process_obs
+from CDARL.data.shapes3d_data import Shape3dDataset
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/3dshapes.h5', type=str)
+parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
 parser.add_argument('--batch-size', default=16, type=int)
-parser.add_argument('--num-train', default=10000, type=int)
-parser.add_argument('--num-test', default=5000, type=int)
+parser.add_argument('--num-train', default=100, type=int) #10000
+parser.add_argument('--num-test', default=50, type=int) #5000
 parser.add_argument('--num-workers', default=4, type=int)
-parser.add_argument('--encoder-type', default='adagvae', type=str)
+parser.add_argument('--encoder-type', default='gvae', type=str)
 parser.add_argument('--num-episodes', default=1, type=int)
 parser.add_argument('--eval-steps', default=2, type=int)
 parser.add_argument('--supervised', default=True, type=bool)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/ADAGVAE/checkpoints/model_3dshapes.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/GVAE/checkpoints/model_gvae_3dshapes.pt', type=str)
 parser.add_argument('--latent-size', default=12, type=int)
-parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
-parser.add_argument('--work-dir', default='/home/mila/l/lea.cote-turcotte/LUSR', type=str)
+parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
+parser.add_argument('--work-dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 args = parser.parse_args()
 
 def reconstruction_loss(x, recon_x):
@@ -36,6 +36,38 @@ def reconstruction_loss(x, recon_x):
     return recon_loss
 
 ######## models ##########
+# Encoder download weights GVAE
+class EncoderG(nn.Module):
+    def __init__(self, style_dim = 8, class_dim = 16, input_channel = 3, flatten_size = 1024):
+        super(EncoderG, self).__init__()
+        self.flatten_size = flatten_size
+
+        self.main = nn.Sequential(
+            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+        )
+
+        self.style_mu = nn.Linear(in_features=flatten_size, out_features=style_dim)
+        self.style_logvar = nn.Linear(in_features=flatten_size, out_features=style_dim)
+
+        # class
+        self.class_mu = nn.Linear(in_features=flatten_size, out_features=class_dim)
+        self.class_logvar = nn.Linear(in_features=flatten_size, out_features=class_dim)
+
+    def forward(self, x):
+        x = self.main(x)
+        x = x.view(x.size(0), -1)
+
+        style_latent_space_mu = self.style_mu(x)
+        style_latent_space_logvar = self.style_logvar(x)
+
+        class_latent_space_mu = self.class_mu(x)
+        class_latent_space_logvar = self.class_logvar(x)
+
+        return style_latent_space_mu, style_latent_space_logvar, class_latent_space_mu, class_latent_space_logvar
+
 # Encoder download weights cycle_vae
 class EncoderD(nn.Module):
     def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
@@ -116,7 +148,7 @@ class EncoderE(nn.Module):
         return mu
 
 class Decoder(nn.Module):
-    def __init__(self, latent_size = 32, output_channel = 3, flatten_size=1024):
+    def __init__(self, latent_size = 40, output_channel = 3, flatten_size=1024):
         super(Decoder, self).__init__()
 
         self.fc = nn.Linear(latent_size, flatten_size)
@@ -147,7 +179,7 @@ class MyModel(nn.Module):
 
         # evaluate policy entangle representation
         elif self.encoder_type == 'vae':
-            latent_size = 32
+            latent_size = 12
             self.encoder = Encoder(latent_size=latent_size)
             self.decoder = Decoder(latent_size)
 
@@ -165,6 +197,14 @@ class MyModel(nn.Module):
             self.encoder = EncoderD(class_latent_size, content_latent_size)
             self.decoder = Decoder(latent_size)
 
+        # evaluate policy disentangled representation
+        elif self.encoder_type == 'gvae':
+            class_latent_size = 8
+            content_latent_size = 32
+            latent_size = class_latent_size + content_latent_size
+            self.encoder = EncoderG(class_latent_size, content_latent_size)
+            self.decoder = Decoder(latent_size)
+
     def forward(self, x):
         with torch.no_grad():
             if self.encoder_type == 'cycle_vae':
@@ -174,8 +214,9 @@ class MyModel(nn.Module):
             elif self.encoder_type == 'vae' or self.encoder_type == 'adagvae':
                 features, _, = self.encoder(x)
                 recon = self.decoder(features)
-            elif self.encoder_type == 'cycle_vae_invar':
-                features, _, style = self.encoder(x)
+            elif self.encoder_type == 'gvae':
+                mu_s, _, mu, _ = self.encoder(x)
+                features = torch.cat([mu_s, mu], dim=1)
                 recon = self.decoder(features)
         return features, recon
 
@@ -191,39 +232,41 @@ def evaluate():
     print('data loaded')
 
     results = {}
-    results['recon_loss'] = []
-    results['mig_score'] = []
-    results['dci_disent_score'] = []
-    results['gaussian_total_corr'] = []
-    results['gaussian_wasserstein_corr'] = []
-    results['mututal_info_score'] = []
+
+    img_batch = dataset.sample_random_batch(args.num_train)
+    img_batch = dataset.process_obs(img_batch, device)
+    _, recon = model(img_batch)
+    recon_loss = reconstruction_loss(img_batch, recon)
+    results['recon_loss'] = recon_loss.item()
+    saved_imgs = torch.cat([img_batch[:10], recon[:10]], dim=0)
+    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/evaluate/3dshapes_%s.png" % (args.encoder_type))
+    print('recon_loss')
 
     features, _ = dataset.generate_batch_factor_code(model, num_points=args.num_train, batch_size=args.batch_size)
 
-    img_batch = dataset.sample_random_batch(args.num_train)
-    img_batch = process_obs(img_batch, device)
-    features, recon = model(img_batch)
-    recon_loss = reconstruction_loss(img_batch, recon)
-    results['recon_loss'].append(recon_loss.item())
-
     gaussian_total_corr = gaussian_total_correlation(features)
-    results['gaussian_total_corr'].append(gaussian_total_corr)
+    results['gaussian_total_corr'] = gaussian_total_corr 
+    print('gaussian_total_corr')
 
     gaussian_wasserstein_corr = gaussian_wasserstein_correlation(features)
-    results['gaussian_wasserstein_corr'].append(gaussian_wasserstein_corr)
+    results['gaussian_wasserstein_corr'] = gaussian_wasserstein_corr
+    print('gaussian_wasserstein_corr')
 
     mututal_info_score = mutual_information_score(features)
-    results['mututal_info_score'].append(mututal_info_score)
-
-    saved_imgs = torch.cat([img_batch[:10], recon[:10]], dim=0)
-    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/evaluate/3dshapes_%s.png" % (args.encoder_type))
+    results['mututal_info_score'] = mututal_info_score
+    print('mututal_info_score')
 
     if args.supervised == True:
         mig_score = compute_mig(dataset, model, num_train=args.num_train, batch_size=args.batch_size)
-        results['mig_score'].append(mig_score["discrete_mig"])
+        results['mig_score'] = mig_score["discrete_mig"] 
+        print('mig_score')
 
         dci_score = compute_dci(dataset, model, num_train=args.num_train, num_test=args.num_test, batch_size=args.batch_size)
-        results['dci_disent_score'].append(dci_score["disentanglement"])
+        results['dci_disent_score'] = dci_score["disentanglement"] 
+        results['dci_comp_score'] = dci_score["completeness"] 
+        results['dci_infotrain_score'] = dci_score["informativeness_train"]
+        results['dci_infotest_score'] = dci_score["informativeness_test"] 
+        print('dci_disent_score')
 
     print('Evaluate %d step and achieved %f gaussian total correlation scores' % (args.num_train, results['gaussian_total_corr']))
     print(results)

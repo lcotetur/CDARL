@@ -138,6 +138,7 @@ class Env():
 
         return memory
 
+
 class Encoder(nn.Module):
     def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
         super(Encoder, self).__init__()

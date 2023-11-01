@@ -228,11 +228,10 @@ def disentanglement_per_code(importance_matrix):
 def disentanglement(importance_matrix):
     """Compute the disentanglement score of the representation."""
     per_code = disentanglement_per_code(importance_matrix)
-    if importance_matrix.sum() == 0.:
+    if importance_matrix.sum() == 0.0:
         importance_matrix = np.ones_like(importance_matrix)
     code_importance = importance_matrix.sum(axis=1) / importance_matrix.sum()
-
-    return np.sum(per_code*code_importance)
+    return np.sum(per_code * code_importance)
 
 
 def completeness_per_factor(importance_matrix):
@@ -247,4 +246,4 @@ def completeness(importance_matrix):
     if importance_matrix.sum() == 0.:
         importance_matrix = np.ones_like(importance_matrix)
     factor_importance = importance_matrix.sum(axis=0) / importance_matrix.sum()
-    return np.sum(per_factor*factor_importance)
+    return np.sum(per_factor * factor_importance)

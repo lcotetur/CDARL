@@ -6,9 +6,6 @@ from torch.distributions import Categorical, Normal
 from torch.autograd import Function
 from utils import reparameterize
 
-
-# TRY IMPLEMENTATION OF MLVAE then from it modify it so it is a GVAE 
-
 # Models for carracing games
 class Encoder(nn.Module):
     def __init__(self, style_dim = 8, class_dim = 16, input_channel = 3, flatten_size = 1024):
@@ -58,8 +55,7 @@ class Decoder(nn.Module):
             nn.ConvTranspose2d(32, 3, 6, stride=2), nn.Sigmoid()
         )
 
-    def forward(self, style_latent_space, class_latent_space):
-        x = torch.cat((style_latent_space, class_latent_space), dim=1)
+    def forward(self, x):
         x = self.fc(x)
         x = x.unsqueeze(-1).unsqueeze(-1)
         x = self.main(x)
@@ -81,17 +77,15 @@ class GVAE(nn.Module):
 
     def forward(self, x):
         mu_s, logsigma_s, mu_c, logsigma_c = self.encoder(x)
-
         mu = torch.sum(mu_c, dim=0)/10
         var = torch.sum(torch.exp(logsigma_c), dim=0)/10
         logvar = torch.log(var)
-        
         mu = mu.repeat(mu_s.shape[0], 1)
         logvar = logvar.repeat(logsigma_s.shape[0], 1)
 
         stylecode = reparameterize(mu_s, logsigma_s)
         contentcode = reparameterize(mu, logvar)
-
-        recon_x = self.decoder(stylecode, contentcode)
+        latent_code = torch.cat((stylecode, contentcode), dim=1)
+        recon_x = self.decoder(latent_code)
 
         return mu_s, logsigma_s, mu, logvar, recon_x

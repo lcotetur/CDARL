@@ -10,11 +10,11 @@ import numpy as np
 import argparse
 import os
 
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform
+from utils import ExpDataset, reparameterize, RandomTransform
 from weak_vae import ADAGVAE, compute_loss
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/carracing_data', type=str, help='path to the data')
+parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
 parser.add_argument('--data-tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--batch-size', default=10, type=int)
@@ -63,8 +63,7 @@ def main():
             for i_batch, imgs in enumerate(loader):
 
                 batch_count += 1
-                # forward circle
-                # Try 
+                    
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
                 imgs = imgs.reshape(-1, *imgs.shape[2:])
                 imgs_repeat = imgs.repeat(2, 1, 1, 1)
@@ -96,10 +95,10 @@ def main():
                         recon_2 = model.decoder(mu2)
 
                     saved_imgs = torch.cat([imgs1, imgs2, recon_mean1, recon_1, recon_2], dim=0)
-                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/ADAGVAE/checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=10)
+                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=10)
 
-                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/ADAGVAE/checkpoints/model_32.pt")
-                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/ADAGVAE/checkpoints/encoder_adagvae_32.pt")
+                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkpoints/model_32.pt")
+                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkpoints/encoder_adagvae_32.pt")
 
             # load next splitted data
             updateloader(loader, dataset)

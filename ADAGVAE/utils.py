@@ -10,23 +10,20 @@ import matplotlib.pyplot as plt
 import random
 import cv2
 from torchvision.utils import save_image
-
+import h5py
 
 def reparameterize(mu, logsigma):
     std = torch.exp(0.5*logsigma)
     eps = torch.randn_like(std)
     return mu + eps*std
 
-
 def obs_extract(obs):
     obs = np.transpose(obs['rgb'], (0,3,1,2))
     return torch.from_numpy(obs)
 
-
 def count_step(i_update, i_env, i_step, num_envs, num_steps):
     step = i_update * (num_steps *  num_envs) + i_env * num_steps + i_step
     return step
-
 
 # for representation learning
 class ExpDataset(Dataset):
@@ -69,7 +66,7 @@ class RandomTransform():
         transforms = []
         for i in range(nb_class+1):
             if i == 0:
-                transforms.append(self.random_crop(self.imgs[i*m:(i+1)*m, :, :, :]))
+                transforms.append(self.imgs[i*m:(i+1)*m, :, :, :])
             if i == nb_class:
                 return torch.stack(transforms)
             elif(i != 0 and i != nb_class):
@@ -82,7 +79,7 @@ class RandomTransform():
         if value == None:
             return self.imgs
         elif blur == True:
-            return self.jitter(self.random_crop(self.imgs), value)
+            return self.jitter(self.random_blur(self.random_crop(self.imgs)), value)
         else:
             return self.jitter(self.imgs, value)
 
@@ -102,7 +99,7 @@ class RandomTransform():
         imgs = transforms.RandomCrop((output_size, output_size), padding=10)(imgs)
         return imgs
 
-    def change_color_grass_random(self, img):
+    def change_color_grass(self, img):
         obs_randomized = np.copy(img.cpu())
         obs_rand = np.transpose(obs_randomized, (2,1,0))
 
@@ -117,32 +114,7 @@ class RandomTransform():
         obs_rand = torch.tensor(obs_rand, dtype=torch.double).to('cuda')
         return obs_rand.permute(2, 1, 0)
 
-    def change_color_grass(self, img, value):
-        obs_randomized = np.copy(img.cpu())
-        obs_rand = np.transpose(obs_randomized, (2,1,0))
-
-        #color_range = [0.1, 0.6]
-        #idx = np.random.randint(3)
-        #print(idx)
-        #this_episode_color = np.random.randint(int(255*color_range[0]), int(255*color_range[1]), 3) / 255
-        this_episode_color = value / 255
-        print(this_episode_color)
-        grass_color = this_episode_color[1] + 20/255
-
-        obs_rand[np.where((np.isclose(obs_rand[:,:,0], 0.4)) & np.isclose(obs_rand[:,:,1], 0.8) & np.isclose(obs_rand[:,:,2], 0.4))] = this_episode_color
-        obs_rand[np.where((np.isclose(obs_rand[:,:,0], 0.4)) & np.isclose(obs_rand[:,:,1], 230/255) & np.isclose(obs_rand[:,:,2], 0.4))] = grass_color
-
-        obs_rand = torch.tensor(obs_rand, dtype=torch.float).to('cuda')
-        print(obs_rand.shape)
-        return obs_rand.permute(2, 1, 0)
-
-    def color_grass(self, values=[np.array([0.1, 0.2, 0.8])*255, np.array([0.1, 0.2, 0.8])*255, np.array([0.1, 0.2, 0.8])*255, np.array([0.1, 0.2, 0.8])*255, np.array([102, 204, 102]), np.array([102, 204, 102])]):
-        imgs = []
-        for index, img in enumerate(self.imgs):
-            imgs.append(self.change_color_grass(img, value=values[0]))
-        return torch.stack(imgs)
-
-    def random_color_grass_random(self, images):
+    def random_color_grass(self, images):
         imgs = []
         for img in images:
             p = random.uniform(0, 1)
@@ -157,7 +129,7 @@ class RandomTransform():
         return torch.stack(imgs)
 
 
-class Results():
+class Resutls():
     def __init__(self, title, xlabel=None, ylabel=None):
         self.logs = {}
         self.title = title
@@ -220,3 +192,18 @@ class Results():
             ax.set_xlabel(xlabel)
             ax.set_ylabel(ylabel.replace('_', ' '))
             fig.savefig(os.path.join(save_path, f'{ylabel}.png'))
+
+def shuffle_codes(z):
+  """Shuffles latent variables across the batch.
+
+  Args:
+    z: [batch_size, num_latent] representation.
+
+  Returns:
+    shuffled: [batch_size, num_latent] shuffled representation across the batch.
+  """
+  z_shuffle = []
+  for i in range(z.get_shape()[1]):
+    z_shuffle.append(tf.random_shuffle(z[:, i]))
+  shuffled = tf.stack(z_shuffle, 1, name="latent_shuffled")
+  return shuffled

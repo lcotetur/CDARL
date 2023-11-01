@@ -20,12 +20,12 @@ from model import Encoder
 
 ######## Args Setting ##########
 parser = argparse.ArgumentParser()
-parser.add_argument('--policy-type', default='end-to-end', type=str)
+parser.add_argument('--policy-type', default='adagvae', type=str)
 parser.add_argument('--ray-adress', default='auto', type=str)
-parser.add_argument('--save-freq', default=10, type=int)
+parser.add_argument('--save-freq', default=100, type=int)
 parser.add_argument('--train-epochs', default=5000, type=int)
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/ADAGVAE/checkpoints/encoder_adagvae.pt')
-parser.add_argument('--model-save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ada.pt', type=str)
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkpoints/encoder_adagvae_32.pt')
+parser.add_argument('--model-save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_ada.pt', type=str)
 parser.add_argument('--train-encoder', default=False, type=bool)
 parser.add_argument('--num-workers', default=1, type=int)
 parser.add_argument('--num-envs-per-worker', default=2, type=int)
@@ -376,7 +376,7 @@ class MyDist(ActionDistribution):
 
     def __init__(self, inputs, model):
         super(MyDist, self).__init__(inputs, model)
-        self.dist = Beta(inputs[:, :3], inputs[:,3:])
+        self.dist = Beta(inputs[:, :3], inputs[:, 3:])
 
     def sample(self):
         self.sampled_action = self.dist.sample()

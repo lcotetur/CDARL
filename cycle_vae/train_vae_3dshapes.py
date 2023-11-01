@@ -2,6 +2,7 @@ import torch
 from torch import optim
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
 
@@ -9,23 +10,35 @@ import numpy as np
 import argparse
 import os
 
+from utils import ExpDataset, reparameterize, RandomTransform
+from model import VAE
 from CDARL.data.shapes3d_data import Shape3dDataset
-from weak_vae import ADAGVAE, compute_loss
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
-parser.add_argument('--batch-size', default=32, type=int)
+parser.add_argument('--batch-size', default=50, type=int)
 parser.add_argument('--num-epochs', default=10000, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--learning-rate', default=0.0001, type=float)
 parser.add_argument('--beta', default=1, type=int)
-parser.add_argument('--save-freq', default=1000, type=int)
-parser.add_argument('--bloss-coef', default=1, type=int)
+parser.add_argument('--save-freq', default=100, type=int)
 parser.add_argument('--latent-size', default=12, type=int)
 parser.add_argument('--flatten-size', default=1024, type=int)
 args = parser.parse_args()
 
-Model = ADAGVAE
+Model = VAE
+
+def vae_loss(x, mu, logsigma, recon_x, beta=1):
+    recon_loss = F.mse_loss(x, recon_x, reduction='mean')
+    kl_loss = -0.5 * torch.sum(1 + logsigma - mu.pow(2) - logsigma.exp())
+    kl_loss = kl_loss / torch.numel(x)
+    return recon_loss + kl_loss * beta
+
+def compute_loss(x, model, beta):
+    mu, logsigma = model.encoder(x)
+    latentcode = reparameterize(mu, logsigma)
+    recon = model.decoder(latentcode)
+    return vae_loss(x, mu, logsigma, recon, beta)
 
 def main():
     # create direc
@@ -49,17 +62,15 @@ def main():
     writer = SummaryWriter()
     batch_count = 0
     for i_epoch in range(args.num_epochs):
-        imgs = dataset.create_weak_vae_batch(args.batch_size, device, k=2)
-        batch_count += args.batch_size * 2
+        imgs = dataset.sample_random_batch(args.batch_size)
+        batch_count += args.batch_size
+
+        imgs = dataset.process_obs(imgs, device)
+        save_image(imgs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/vae_3dshapes.png", nrow=10)
+
         optimizer.zero_grad()
 
-        m = int(imgs.shape[2]/2) # 64
-        feature_1 = imgs[:, :, :m, :] # torch.Size([10, 3, 64, 64])
-        feature_2 = imgs[:, :, m:, :] # torch.Size([10, 3, 64, 64])
-        saved_imgs = torch.cat([feature_1, feature_2], dim=0)
-        save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkimages/model_inputs.png", nrow=10)
-
-        loss = compute_loss(model, feature_1, feature_2, beta=args.beta)
+        loss = compute_loss(imgs, model, args.beta)
 
         loss.backward()
         optimizer.step()
@@ -67,22 +78,20 @@ def main():
         # write log
         writer.add_scalar('loss', loss.item(), batch_count)
 
-        # save image to check and save model 
-        if batch_count % args.save_freq == 0:
+                # save image to check and save model 
+        if i_epoch % args.save_freq == 0:
             print("%d Epochs, %d Batches is Done." % (i_epoch, batch_count))
-            imgs1 = feature_1[10:20]
-            imgs2 = feature_2[10:20]
+            rand_idx = torch.randperm(imgs.shape[0])
+            imgs = imgs[rand_idx[:10]]
             with torch.no_grad():
-                mu, logsigma = model.encoder(imgs1)
-                mu2, logsigma2 = model.encoder(imgs2)
-                recon_1 = model.decoder(mu)
-                recon_2 = model.decoder(mu2)
+                mu, _ = model.encoder(imgs)
+                recon_imgs1 = model.decoder(mu)
 
-            saved_imgs = torch.cat([imgs1, imgs2, recon_1, recon_2], dim=0)
-            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkimages/%d_%d.png" % (i_epoch, batch_count), nrow=10)
+            saved_imgs = torch.cat([imgs, recon_imgs1], dim=0)
+            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/vae_%d_%d.png" % (i_epoch, batch_count), nrow=10)
 
-            torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkpoints/model_3dshapes.pt")
-            torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkpoints/encoder_3dshapes.pt")
+            torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/model_vae_3dshapes.pt")
+            torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/encoder_vae_3dshapes.pt")
 
     writer.close()
 

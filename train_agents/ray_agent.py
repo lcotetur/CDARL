@@ -20,12 +20,11 @@ from model import Encoder
 
 ######## Args Setting ##########
 parser = argparse.ArgumentParser()
-parser.add_argument('--policy-type', default='end-to-end', type=str)
 parser.add_argument('--ray-adress', default='auto', type=str)
 parser.add_argument('--save-freq', default=10, type=int)
 parser.add_argument('--train-epochs', default=5000, type=int)
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder.pt')
-parser.add_argument('--model-save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ray.pt', type=str)
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_online.pt')
+parser.add_argument('--model-save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy.pt', type=str)
 parser.add_argument('--train-encoder', default=False, type=bool)
 parser.add_argument('--num-workers', default=1, type=int)
 parser.add_argument('--num-envs-per-worker', default=2, type=int)
@@ -52,8 +51,6 @@ args = parser.parse_args()
 #def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
     #obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
     #return np.transpose(obs, (2,0,1))
-
-# TO DO: CHANGE PREPROCESS FOR AUGMENTED POLICY
 
 def process_obs(obs): # a single frame (96, 96, 3) for CarRacing
     obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
@@ -91,9 +88,9 @@ register_env("myenv", lambda config: MyEnvRewardWrapper(config))
 
 
 ######## Model Setting ##########
-class EncoderI(nn.Module):
+class Encoder(nn.Module):
     def __init__(self, latent_size = 32, input_channel = 3):
-        super(EncoderI, self).__init__()
+        super(Encoder, self).__init__()
         self.latent_size = latent_size
         self.main = nn.Sequential(
             nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
@@ -108,85 +105,6 @@ class EncoderI(nn.Module):
         x = x.view(x.size(0), -1)
         mu = self.linear_mu(x)
         return mu
-    
-# Encoder download weights disent
-class EncoderD(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
-        super(EncoderD, self).__init__()
-
-        self.main = nn.Sequential(
-            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
-        )
-
-        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
-        self.linear_logsigma = nn.Linear(flatten_size, content_latent_size)
-        self.linear_classcode = nn.Linear(flatten_size, class_latent_size)
-
-    def forward(self, x):
-        x = self.main(x)
-        x = x.view(x.size(0), -1)
-        mu = self.linear_mu(x)
-        logsigma = self.linear_logsigma(x)
-        classcode = self.linear_classcode(x)
-        return mu, logsigma, classcode
-    
-# Encoder end-to-end
-class EncoderE(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
-        super(EncoderE, self).__init__()
-        self.class_latent_size = class_latent_size
-        self.content_latent_size = content_latent_size
-        self.flatten_size = flatten_size
-
-        self.main = nn.Sequential(
-            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
-        )
-
-        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
-        self.linear_logsigma = nn.Linear(flatten_size, content_latent_size)
-        self.linear_classcode = nn.Linear(flatten_size, class_latent_size) 
-
-    def forward(self, x):
-        x = self.main(x)
-        x = x.view(x.size(0), -1)
-        mu = self.linear_mu(x)
-        logsigma = self.linear_logsigma(x)
-        classcode = self.linear_classcode(x)
-        return mu
-
-    def get_feature(self, x):
-        mu, logsigma, classcode = self.forward(x)
-        return mu
-    
-# Encoder download weights vae
-class Encoder(nn.Module):
-    def __init__(self, latent_size = 32, input_channel = 3, flatten_size = 1024):
-        super(Encoder, self).__init__()
-        self.latent_size = latent_size
-
-        self.main = nn.Sequential(
-            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
-            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
-        )
-
-        self.linear_mu = nn.Linear(flatten_size, latent_size)
-        self.linear_logsigma = nn.Linear(flatten_size, latent_size)
-
-    def forward(self, x):
-        x = self.main(x)
-        x = x.view(x.size(0), -1)
-        mu = self.linear_mu(x)
-        logsigma = self.linear_logsigma(x)
-
-        return mu, logsigma
 
 class MyModel(TorchModelV2, nn.Module):
     def __init__(self, obs_space, action_space, num_outputs, model_config,
@@ -194,91 +112,9 @@ class MyModel(TorchModelV2, nn.Module):
         TorchModelV2.__init__(self, obs_space, action_space, num_outputs,
                               model_config, name)
         nn.Module.__init__(self)
-        self.policy_type = custom_config['policy_type']
-
         custom_config = model_config["custom_options"]
         latent_size = custom_config['latent_size']
 
-        # evaluate policy with end-to-end training
-        if self.policy_type == 'end_to_end':
-            latent_size = 16
-            self.main = EncoderE(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
-
-            if custom_config['encoder_path'] is not None:
-                # saved checkpoints could contain extra weights such as linear_logsigma 
-                weights = torch.load(custom_config['encoder_path'], map_location=torch.device('cpu'))
-                for k in list(weights.keys()):
-                    if k not in self.main.state_dict().keys():
-                        del weights[k]
-                self.main.load_state_dict(weights)
-                print("Loaded Weights")
-            else:
-                print("No Load Weights")
-        
-        # evaluate policy invariant representation
-        elif self.policy_type == 'invar':
-            latent_size = 32
-            self.main = EncoderI(latent_size=latent_size)
-
-            if custom_config['encoder_path'] is not None:
-                # saved checkpoints could contain extra weights such as linear_logsigma 
-                weights = torch.load(custom_config['encoder_path'], map_location=torch.device('cpu'))
-                for k in list(weights.keys()):
-                    if k not in self.main.state_dict().keys():
-                        del weights[k]
-                self.main.load_state_dict(weights)
-                print("Loaded Weights")
-            else:
-                print("No Load Weights")
-
-        # evaluate policy entangle representation
-        elif self.policy_type == 'repr':
-            latent_size = 32
-            self.main = Encoder(latent_size=latent_size)
-
-            if custom_config['encoder_path'] is not None:
-                # saved checkpoints could contain extra weights such as linear_logsigma 
-                weights = torch.load(custom_config['encoder_path'], map_location=torch.device('cpu'))
-                for k in list(weights.keys()):
-                    if k not in self.main.state_dict().keys():
-                        del weights[k]
-                self.main.load_state_dict(weights)
-                print("Loaded Weights")
-            else:
-                print("No Load Weights")
-
-        # evaluate policy disentangled representation
-        elif self.policy_type == 'disent':
-            class_latent_size = 8
-            content_latent_size = 16
-            latent_size = class_latent_size + content_latent_size
-            self.main = EncoderD(class_latent_size, content_latent_size)
-
-            if custom_config['encoder_path'] is not None:
-                # saved checkpoints could contain extra weights such as linear_logsigma 
-                weights = torch.load(custom_config['encoder_path'], map_location=torch.device('cpu'))
-                for k in list(weights.keys()):
-                    if k not in self.main.state_dict().keys():
-                        del weights[k]
-                self.main.load_state_dict(weights)
-                print("Loaded Weights")
-            else:
-                print("No Load Weights")
-            
-    
-        # evaluate policy no encoder
-        elif self.policy_type == 'ppo'  or self.policy_type == 'augm':
-            latent_size = 2*2*256
-            self.cnn_base = nn.Sequential(
-                    nn.Conv2d(3, 32, 4, stride=2), nn.ReLU(),
-                    nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
-                    nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
-                    nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
-                )
-            nn.init.xavier_uniform(self.cnn_base.weight, gain=nn.init.calculate_gain('relu'))
-            nn.init.constant(self.cnn_base.bias, 0.1)
-
-        '''
         self.main = Encoder(latent_size=latent_size)
     
         if custom_config['encoder_path'] is not None:
@@ -291,7 +127,6 @@ class MyModel(TorchModelV2, nn.Module):
             print("Loaded Weights")
         else:
             print("No Load Weights")
-        '''
         
         self.critic = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
         self.actor = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
@@ -303,27 +138,10 @@ class MyModel(TorchModelV2, nn.Module):
 
     @override(TorchModelV2)
     def forward(self, input_dict, state, seq_lens):
-        if self.policy_type == 'ppo' or self.policy_type == 'augm':
-            x = self.cnn_base(input_dict['obs'].float())
-            features = x.view(x.size(0), -1)
-        elif self.policy_type == 'disent':
-            content, _, style = self.main(input_dict['obs'].float())
-            features = torch.cat([content, style], dim=1)
-            if not self.train_encoder:
-                features = features.detach() 
-        elif self.policy_type == 'repr':
-            features, _, = self.main(input_dict['obs'].float())
-            if not self.train_encoder:
-                features = features.detach() 
-        else:
-            features = self.main(input_dict['obs'].float())
-            if not self.train_encoder:
-                features = features.detach() 
-        '''
         features = self.main(input_dict['obs'].float())
         if not self.train_encoder:
             features = features.detach()  # not train the encoder
-        '''
+
         actor_features = self.actor(features)
         alpha = self.alpha_head(actor_features)+1
         beta = self.beta_head(actor_features)+1
@@ -384,7 +202,6 @@ ModelCatalog.register_custom_action_dist("mydist", MyDist)
 
 ########### Do Training #################
 def main():
-    print(f'policy type is {args.policy_type}, do not forget to change the name of model_save_path')
     print(f'ray adress is {args.ray_adress}')
     ray.init(address=args.ray_adress, redis_password='5241590000000000')
     
@@ -392,7 +209,7 @@ def main():
     trainer = PPOTrainer(env="myenv", config={
         "use_pytorch": True,
         "model":{"custom_model":"mymodel", 
-                "custom_options":{'encoder_path':args.encoder_path, 'train_encoder':args.train_encoder, 'latent_size':args.latent_size, 'policy_type':args.policy_type},
+                "custom_options":{'encoder_path':args.encoder_path, 'train_encoder':args.train_encoder, 'latent_size':args.latent_size},
                 "custom_action_dist":"mydist",
                 },
         "env_config":{'game':'CarRacing'},

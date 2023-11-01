@@ -14,7 +14,7 @@ from utils import ExpDataset, reparameterize, RandomTransform
 from model import GVAE
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/carracing_data', type=str, help='path to the data')
+parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
 parser.add_argument('--data-tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--batch-size', default=10, type=int)
@@ -80,9 +80,12 @@ def main():
                 batch_count += 1
                 # forward circle
                 # Try 
-                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs = RandomTransform(imgs).apply_transformations(nb_class=5)
+                imgs = imgs.to(device, non_blocking=True)
+                save_image(imgs[0], "/home/mila/l/lea.cote-turcotte/CDARL/GVAE/checkimages/test.png")
+                #imgs = imgs.reshape(-1, *imgs.shape[2:])
+                #save_image(imgs, "/home/mila/l/lea.cote-turcotte/CDARL/GVAE/checkimages/test_repeat.png")
+                #save_image(imgs.repeat(2, 1, 1, 1), "/home/mila/l/lea.cote-turcotte/CDARL/GVAE/checkimages/test_repeat.png")
+                #imgs = RandomTransform(imgs).apply_transformations(nb_class=5)
                 #imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
                 optimizer.zero_grad()
 
@@ -108,17 +111,16 @@ def main():
                     with torch.no_grad():
                         mu_s, logsigma_s, mu, logvar, recon_x = model(imgs1)
                         mu_s2, logsigma_s2, mu2, logvar2, recon_x2 = model(imgs2)
-                        style_code = reparameterize(mu_s, logsigma_s)
-                        contentcode1 = reparameterize(mu, logvar)
-                        contentcode2 = reparameterize(mu2, logvar2)
-                        recon_imgs1 = model.decoder(mu_s, mu)
-                        recon_combined = model.decoder(mu_s2, mu)
+                        latent_code1 = torch.cat((mu_s, mu), dim=1)
+                        latent_code2 = torch.cat((mu_s2, mu), dim=1)
+                        recon_imgs1 = model.decoder(latent_code1)
+                        recon_combined = model.decoder(latent_code2)
 
                     saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/GVAE/checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=9)
+                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/GVAE/checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=9)
 
-                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/GVAE/checkpoints/model.pt")
-                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/GVAE/checkpoints/encoder.pt")
+                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/GVAE/checkpoints/model.pt")
+                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/GVAE/checkpoints/encoder.pt")
 
             # load next splitted data
             updateloader(loader, dataset)

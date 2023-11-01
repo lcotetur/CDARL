@@ -60,9 +60,7 @@ class Env():
         save_image(torch.tensor(processed_obs.copy(), dtype=torch.float32), "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/preprocesss_ppo_carracing.png", nrow=12)
         #img_gray = self.rgb2gray(processed_obs)
         self.stack = [processed_obs] * args.img_stack
-        print(np.array(self.stack).shape)
         img = np.concatenate(self.stack, axis=0)
-        print(img.shape)
         #print(np.array(self.stack).shape)
         #print(np.array(self.stack).reshape(12, 64, 64).shape)   # four frames for decision
         #return np.array(self.stack).reshape(12, 64, 64)
@@ -186,7 +184,7 @@ class Agent():
         return action, a_logp
 
     def save_param(self):
-        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ppo.pt')
+        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ppo_stack.pt')
 
     def store(self, transition):
         self.buffer[self.counter] = transition

@@ -1,6 +1,7 @@
 import argparse
 
 import numpy as np
+import time
 
 import gym
 import torch
@@ -9,47 +10,38 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Beta
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
-from utils import Resutls
 import cv2
 from torchvision.utils import save_image
-from utils import RandomTransform, ExpDataset
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
-import time
+from CDARL.utils import RandomTransform, Results
 
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
 parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_offline.pt')
-parser.add_argument('--train-encoder', default=False, type=bool)
-parser.add_argument('--learning-rate', default=0.0002, type=float)
+parser.add_argument('--latent-size', default=16, type=int)
+parser.add_argument('--learning-rate', default=1e-3, type=float)
 parser.add_argument('--learning-rate-vae', default=0.0001, type=float)
-parser.add_argument('--latent-size', default=32, type=int)
 parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
-parser.add_argument('--img-stack', type=int, default=3, metavar='N', help='stack N image in a state (default: 3)')
+parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--render', action='store_true', help='render the environment')
-parser.add_argument('--vis', action='store_true', help='use visdom')
 parser.add_argument('--beta', default=10, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
 parser.add_argument('--class-latent-size', default=8, type=int)
 parser.add_argument('--content-latent-size', default=32, type=int)
-parser.add_argument('--log-interval', type=int, default=100, metavar='N', help='interval between training status logs (default: 10)')
-parser.add_argument('--num_workers', default=4, type=int)
-parser.add_argument('--entropy_coef', default=.01, type=float)
-parser.add_argument('--value_loss_coef', default=2., type=float)
+parser.add_argument('--log-interval', default=100, type=int, metavar='N', help='interval between training status logs (default: 10)')
+parser.add_argument('--entropy-coef', default=.01, type=float)
+parser.add_argument('--value-loss-coef', default=2., type=float)
 parser.add_argument('--agent-update-freq', default=1, type=int)
-parser.add_argument('--vae-update-fred', default=2, type=int)
+parser.add_argument('--vae-update-freq', default=3, type=int)
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
-#device = torch.device("cpu")
 torch.manual_seed(args.seed)
 if use_cuda:
     torch.cuda.manual_seed(args.seed)
 
-transition = np.dtype([('s', np.float64, (3, 64, 64)), ('a', np.float64, (3,)), ('a_logp', np.float64),
-                       ('r', np.float64), ('s_', np.float64, (3, 64, 64))])
+transition = np.dtype([('s', np.float64, (12, 64, 64)), ('a', np.float64, (3,)), ('a_logp', np.float64),
+                       ('r', np.float64), ('s_', np.float64, (12, 64, 64))])
 
 def updateloader(loader, dataset):
     dataset.loadnext()
@@ -77,7 +69,6 @@ def forward_loss(x, model, beta):
 
     recon_x1 = model.decoder(latentcode1)
     recon_x2 = model.decoder(latentcode2)
-
     return vae_loss(x, mu, logsigma, recon_x1, beta) + vae_loss(x, mu, logsigma, recon_x2, beta)
 
 def backward_loss(x, model, device):
@@ -110,7 +101,7 @@ class Env():
         self.env.seed(args.seed)
         self.reward_threshold = self.env.spec.reward_threshold
 
-    def process_obs(self, obs): # a single frame (96, 96, 3) for CarRacing
+    def process_obs(self, obs):
         obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
         obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
         return np.transpose(obs, (2,0,1))
@@ -122,8 +113,15 @@ class Env():
         self.die = False
         img_rgb = self.env.reset()
         processed_obs = self.process_obs(img_rgb)
-        return processed_obs
-
+        #img_gray = self.rgb2gray(processed_obs)
+        self.stack = [processed_obs] * args.img_stack
+        img = np.concatenate(self.stack, axis=0)
+        #print(np.array(self.stack).shape)
+        #print(np.array(self.stack).reshape(12, 64, 64).shape)   # four frames for decision
+        #return np.array(self.stack).reshape(12, 64, 64)
+        return img
+        
+        #return processed_obs
 
     def step(self, action):
         total_reward = 0
@@ -141,6 +139,12 @@ class Env():
             if done or die:
                 break
         img_rgb = self.process_obs(img_rgb)
+        #img_gray = self.rgb2gray(img_rgb)
+        self.stack.pop(0)
+        self.stack.append(img_rgb)
+        assert len(self.stack) == args.img_stack
+        img_rgb = np.array(self.stack).reshape(12, 64, 64)
+        #return np.array(self.stack), total_reward, done, die
         return img_rgb, total_reward, done, die
 
     def render(self, *arg):
@@ -171,7 +175,7 @@ class Env():
         return memory
 
 class Encoder(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 12, flatten_size = 1024):
         super(Encoder, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
@@ -210,7 +214,7 @@ class Encoder(nn.Module):
         return mu
 
 class Decoder(nn.Module):
-    def __init__(self, latent_size=32, output_channel=3, flatten_size=1024):
+    def __init__(self, latent_size=32, output_channel=12, flatten_size=1024):
         super(Decoder, self).__init__()
 
         self.fc = nn.Linear(latent_size, flatten_size)
@@ -219,7 +223,7 @@ class Decoder(nn.Module):
             nn.ConvTranspose2d(flatten_size, 128, 5, stride=2), nn.ReLU(),
             nn.ConvTranspose2d(128, 64, 5, stride=2), nn.ReLU(),
             nn.ConvTranspose2d(64, 32, 6, stride=2), nn.ReLU(),
-            nn.ConvTranspose2d(32, 3, 6, stride=2), nn.Sigmoid()
+            nn.ConvTranspose2d(32, 12, 6, stride=2), nn.Sigmoid()
         )
         self.apply(self._weights_init)
 
@@ -236,7 +240,7 @@ class Decoder(nn.Module):
         return x
 
 class DisentangledVAE(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, img_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 32, img_channel = 12, flatten_size = 1024):
         super(DisentangledVAE, self).__init__()
         self.encoder = Encoder(class_latent_size, content_latent_size, img_channel, flatten_size)
         self.decoder = Decoder(class_latent_size + content_latent_size, img_channel, flatten_size)
@@ -254,20 +258,22 @@ class ActorCriticNet(nn.Module):
     def __init__(self, args, content_latent_size=32):
         nn.Module.__init__(self)
 
-        self.main = Encoder()  
-
+        self.main = Encoder() 
         self.critic = nn.Sequential(nn.Linear(content_latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
         self.actor = nn.Sequential(nn.Linear(content_latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
         self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
         self.beta_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
-        self.train_encoder = args.train_encoder
-        print("Train Encoder: ", self.train_encoder)
+        self.apply(self._weights_init)
 
-    def forward(self, input):
-        features = self.main.get_feature(input) #for online encoder
-        if not self.train_encoder:
-            features = features.detach()  # not train the encoder
+    @staticmethod
+    def _weights_init(m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+            nn.init.constant_(m.bias, 0.1)
 
+    def forward(self, x):
+        features = self.main.get_feature(x) #for online encoder
+        features = features.detach()  # not train the encoder
         v = self.critic(features)
         actor_features = self.actor(features)
         alpha = self.alpha_head(actor_features) + 1
@@ -275,14 +281,13 @@ class ActorCriticNet(nn.Module):
 
         return (alpha, beta), v
 
-
 class Agent():
     """
     Agent for training
     """
     max_grad_norm = 0.5
     clip_param = 0.1  # epsilon in clipped loss
-    ppo_epoch = 20
+    ppo_epoch = 10
     buffer_capacity, batch_size = 2000, 128
     batch_size_vae = 100
 
@@ -294,7 +299,7 @@ class Agent():
         self.buffer = np.empty(self.buffer_capacity, dtype=transition)
         self.counter = 0
 
-        self.optimizer = optim.Adam(self.net.parameters(), lr=1e-3)
+        self.optimizer = optim.Adam(self.net.parameters(), lr=args.learning_rate)
 
         self.model = DisentangledVAE(class_latent_size = args.class_latent_size, content_latent_size = args.content_latent_size).to(device)
         self.vae_optimizer = optim.Adam(self.model.parameters(), lr=args.learning_rate_vae)
@@ -312,7 +317,7 @@ class Agent():
         return action, a_logp
 
     def save_param(self):
-        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_end_to_end.pt')
+        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_endtoend_stack.pt')
 
     def store(self, transition):
         self.buffer[self.counter] = transition
@@ -333,24 +338,30 @@ class Agent():
 
         old_a_logp = torch.tensor(self.buffer['a_logp'], dtype=torch.float).to(device).view(-1, 1)
 
-        #Generalized Advantage Estimation (gae)
         with torch.no_grad():
             target_v = r + args.gamma * self.net(s_)[1]
             adv = target_v - self.net(s)[1]
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-        if self.training_step % args.vae_update_freq == 0:
+        if self.training_step % args.vae_update_freq == 0 and self.vae_batches < 100000:
+            print('update cycle vae')
             for _ in range(100):
                 for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
                     self.vae_batches += 1
                     imgs = s[index]
-                    imgs = RandomTransform(imgs).apply_transformations(nb_class=10, value=None)
+                    images = []
+                    i = 0
+                    while i < 12:
+                        image = RandomTransform(imgs[:, i:i+3, :, :]).apply_transformations(nb_class=10, value=None)
+                        images.append(image)
+                        i=i+3
+                    imgs = torch.cat(images, dim=2)
 
                     floss = 0
                     for i_class in range(imgs.shape[0]):
                         image = imgs[i_class]
                         floss += forward_loss(image, self.model, args.beta)
-                        save_image(image, "/home/mila/l/lea.cote-turcotte/LUSR/figures/class_%d.png" % (i_class))
+                        save_image(image[:, :3, :, :], "/home/mila/l/lea.cote-turcotte/CDARL/figures/class_%d.png" % (i_class))
                     floss = floss / imgs.shape[0] # divided by the number of classes
 
                     # backward circle
@@ -376,14 +387,13 @@ class Agent():
                         recon_imgs1 = self.model.decoder(torch.cat([mu, classcode1], dim=1))
                         recon_combined = self.model.decoder(torch.cat([mu, classcode2], dim=1))
 
-                    saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/z%d_%d.png" % (self.vae_epoch, self.vae_batches), nrow=9)
-                    torch.save(self.model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_endtoend.pt")
+                    saved_imgs = torch.cat([imgs1[:, 9:12, :, :], imgs2[:, 9:12, :, :], recon_imgs1[:, 9:12, :, :], recon_combined[:, 9:12, :, :]], dim=0)
+                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/zstack%d_%d.png" % (self.vae_epoch, self.vae_batches), nrow=9)
+                    torch.save(self.model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/encoder_endtoend_stack.pt")
             self.vae_epoch += 1
 
-        '''
         if self.training_step % args.agent_update_freq == 0:
-            print('updating agent')
+            print('upated agent')
             for _ in range(self.ppo_epoch):
                 for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size, False):
 
@@ -405,16 +415,15 @@ class Agent():
                     loss.backward()
                     nn.utils.clip_grad_norm_(self.net.parameters(), self.max_grad_norm)
                     self.optimizer.step()
-        '''
 
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-    #results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="endtoend_running_score")
-    #results_ppo.create_logs(labels=["episode", "endtoend_running_score", "endtoend_episode_score", "training_time"], init_values=[[], [], [], []])
 
-    results_vae = Resutls(title="Cycle Consistent vae Loss", xlabel="vae_epoch", ylabel="loss")
+    results_ppo = Results(title="Moving averaged episode reward", xlabel="episode", ylabel="endtoend_running_score")
+    results_ppo.create_logs(labels=["episode", "endtoend_running_score", "endtoend_episode_score", "training_time"], init_values=[[], [], [], []])
+
+    results_vae = Results(title="Cycle Consistent vae Loss", xlabel="vae_epoch", ylabel="loss")
     results_vae.create_logs(labels=["vae_batches", "vae_epoch", "loss"], init_values=[[], [], []])
 
     agent = Agent(args, results_vae, 0, 0)
@@ -449,20 +458,20 @@ if __name__ == "__main__":
 
         if i_ep % args.log_interval == 0:
             training_time = time.time() - start_time
-            #results_ppo.update_logs(["episode", "endtoend_running_score", "endtoend_episode_score", "training_time"], [i_ep, endtoend_running_score, endtoend_episode_score, training_time])
+            results_ppo.update_logs(["episode", "endtoend_running_score", "endtoend_episode_score", "training_time"], [i_ep, endtoend_running_score, endtoend_episode_score, training_time])
             print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, endtoend_running_score))
             print('Training time: {:.2f}\t'.format(training_time))
             agent.save_param()
-            #results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(1))
-            results_vae.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(2))
+            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(9))
+            results_vae.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(10))
         if endtoend_running_score > env.reward_threshold:
-            #results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(1))
-            results_vae.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(2))
-            #results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/1','/home/mila/l/lea.cote-turcotte/LUSR/figures')
-            results_vae.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/2','/home/mila/l/lea.cote-turcotte/LUSR/figures')
+            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(9))
+            results_vae.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(10))
+            results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/logs/9','/home/mila/l/lea.cote-turcotte/CDARL/figures')
+            results_vae.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/logs/10','/home/mila/l/lea.cote-turcotte/CDARL/figures')
             print("Solved! Running reward is now {} and the last episode runs to {}!".format(endtoend_running_score, score))
             break
-    #results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(1))
-    results_vae.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(2))
-    #results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/1', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
-    results_vae.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/2','/home/mila/l/lea.cote-turcotte/LUSR/figures')
+    results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(9))
+    results_vae.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(10))
+    results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/logs/9', '/home/mila/l/lea.cote-turcotte/CDARL/figures')
+    results_vae.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/logs/10','/home/mila/l/lea.cote-turcotte/CDARL/figures')

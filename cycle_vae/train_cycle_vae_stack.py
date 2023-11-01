@@ -21,6 +21,7 @@ parser.add_argument('--batch-size', default=10, type=int)
 parser.add_argument('--num-epochs', default=2, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--learning-rate', default=0.0001, type=float)
+parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--beta', default=10, type=int)
 parser.add_argument('--save-freq', default=100, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
@@ -28,7 +29,6 @@ parser.add_argument('--class-latent-size', default=8, type=int)
 parser.add_argument('--content-latent-size', default=32, type=int)
 parser.add_argument('--flatten-size', default=1024, type=int)
 parser.add_argument('--random-augmentations', default=False, type=bool)
-parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
 args = parser.parse_args()
 
 Model = DisentangledVAE
@@ -38,7 +38,6 @@ def updateloader(loader, dataset):
     dataset.loadnext()
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     return loader
-
 
 def vae_loss(x, mu, logsigma, recon_x, beta=1):
     recon_loss = F.mse_loss(x, recon_x, reduction='mean')
@@ -94,29 +93,29 @@ def main():
     transform = transforms.Compose([transforms.ToTensor()])
     dataset = ExpDataset(args.data_dir, args.data_tag, args.num_splitted, transform)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    print(1)
+    print('a')
     # create model
-    model = Model(class_latent_size = args.class_latent_size, content_latent_size = args.content_latent_size)
+    model = Model(class_latent_size = args.class_latent_size, content_latent_size = args.content_latent_size, input_channel = 3 * args.img_stack)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
-    print(1)
+    print('a')
     # do the training
     writer = SummaryWriter()
     batch_count = 0
     for i_epoch in range(args.num_epochs):
         for i_split in range(args.num_splitted):
             for i_batch, imgs in enumerate(loader):
-
+                print('a')
                 batch_count += 1
-                # forward circle
-                # Try 
-                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
+                print((imgs * args.img_stack).shape)
+                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 12, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
                 if args.random_augmentations:
                     imgs = imgs.reshape(-1, *imgs.shape[2:])
                     imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
                 optimizer.zero_grad()
-                print(1)
+                print((imgs * args.img_stack).shape)
+                imgs = torch.cat([imgs * args.img_stack], dim=2)
 
                 floss = 0
                 for i_class in range(imgs.shape[0]): # imgs.shape[0] = 5 
@@ -126,7 +125,7 @@ def main():
                 floss = floss / imgs.shape[0] # divided by the number of classes
 
                 # backward circle
-                imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
+                imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 12, 64, 64]) to torch.Size([50, 12, 64, 64])
                 # batch of 50 imagees with mix classes
                 bloss = backward_loss(imgs, model, device)
 
@@ -151,11 +150,11 @@ def main():
                         recon_imgs1 = model.decoder(torch.cat([mu, classcode1], dim=1))
                         recon_combined = model.decoder(torch.cat([mu, classcode2], dim=1))
 
-                    saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
-                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=9)
+                    saved_imgs = torch.cat([imgs1[:, 9:12, :, :], imgs2[:, 9:12, :, :], recon_imgs1[:, 9:12, :, :], recon_combined[:, 9:12, :, :]], dim=0)
+                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/z_stack%d_%d_%d.png" % (i_epoch, i_split,i_batch), nrow=9)
 
-                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/model_cycle_vae.pt")
-                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/encoder_cycle_vae.pt")
+                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/model_cycle_vae_stack.pt")
+                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/encoder_cycle_vae_stack.pt")
 
             # load next splitted data
             updateloader(loader, dataset)

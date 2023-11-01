@@ -5,8 +5,8 @@ from ray.tune.registry import register_env
 from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from ray.rllib.models import ModelCatalog, ActionDistribution
 from ray.rllib.utils.annotations import override
-from video import VideoRecorder
-from utils import RandomTransform
+from CDARL.video import VideoRecorder
+from CDARL.utils import RandomTransform
 
 import torch
 import torch.nn as nn
@@ -22,19 +22,19 @@ import argparse
 import time
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--policy-type', default='ppo', type=str)
+parser.add_argument('--policy-type', default='end_to_end', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ppo_stack.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_endtoend_stack.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
-parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
+parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
 parser.add_argument('--action-repeat', default=4, type=int)
 parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--save_video', default=True, action='store_true')
-parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/LUSR', type=str)
+parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 parser.add_argument('--nb_domain', default=4, type=int)
 args = parser.parse_args()
 
@@ -66,7 +66,7 @@ class EncoderI(nn.Module):
 
 # Encoder download weights vae
 class Encoder(nn.Module):
-    def __init__(self, latent_size = 32, input_channel = 3, flatten_size = 1024):
+    def __init__(self, latent_size = 32, input_channel = 12, flatten_size = 1024):
         super(Encoder, self).__init__()
         self.latent_size = latent_size
 
@@ -90,7 +90,7 @@ class Encoder(nn.Module):
 
 # Encoder download weights disent
 class EncoderD(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 12, flatten_size = 1024):
         super(EncoderD, self).__init__()
 
         self.main = nn.Sequential(
@@ -114,7 +114,7 @@ class EncoderD(nn.Module):
 
 # Encoder end-to-end
 class EncoderE(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 16, input_channel = 12, flatten_size = 1024):
         super(EncoderE, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
@@ -150,8 +150,8 @@ class MyModel(nn.Module):
 
         # evaluate policy with end-to-end training
         if self.policy_type == 'end_to_end':
-            latent_size = 16
-            self.main = EncoderE(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
+            latent_size = 32
+            self.main = EncoderE(class_latent_size = 8, content_latent_size = 32, input_channel = 12, flatten_size = 1024)
         
         # evaluate policy invariant representation
         elif self.policy_type == 'invar':
@@ -255,7 +255,7 @@ def main():
                     obs, reward, done, info = env.step(action)
                     obs = process_obs(obs)
                     t_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, blur)
-                    save_image(t_obs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/obs_%d.png" % (domain))
+                    save_image(t_obs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/obs_%d.png" % (domain))
                     stack.pop(0)
                     stack.append(np.array(t_obs))
                     assert len(stack) == args.img_stack

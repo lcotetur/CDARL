@@ -10,11 +10,11 @@ import numpy as np
 import argparse
 import os
 
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform
-from cycle_vae import VAE
+from utils import ExpDataset, reparameterize, RandomTransform
+from model import VAE
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/carracing_data', type=str, help='path to the data')
+parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
 parser.add_argument('--data-tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--batch-size', default=10, type=int)
@@ -82,7 +82,7 @@ def main():
                 if args.random_augmentations == True:
                     imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
                     imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
-                save_image(imgs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/see_transform.png")
+                save_image(imgs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/see_transform.png")
 
                 optimizer.zero_grad()
                 loss = compute_loss(imgs, model, args.beta)
@@ -103,10 +103,10 @@ def main():
                         recon_imgs1 = model.decoder(mu)
 
                     saved_imgs = torch.cat([imgs, recon_imgs1], dim=0)
-                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/vae_%d_%d_%d.png" % (i_epoch, i_split, i_batch), nrow=9)
+                    save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/vae_%d_%d_%d.png" % (i_epoch, i_split, i_batch), nrow=9)
 
-                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/model_vae.pt")
-                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/encoder_vae.pt")
+                    torch.save(model.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/model_vae.pt")
+                    torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/encoder_vae.pt")
 
             # load next splitted data
             updateloader(loader, dataset)

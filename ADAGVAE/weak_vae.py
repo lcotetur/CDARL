@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from CDARL.utils import reparameterize
+from utils import reparameterize
 
 class Encoder(nn.Module):
     def __init__(self, latent_size = 32, input_channel = 3, flatten_size = 1024):
@@ -125,6 +125,37 @@ def create_mask(x):
     for i, item in enumerate(x):
         index.append(torch.le(item, sep[i]))
     return torch.stack(index)
+
+    '''
+        def estimate_shared_mask(cls, z_deltas: torch.Tensor, ratio: float) -> torch.Tensor:
+        """
+        Core of the adaptive VAE algorithm, estimating which factors
+        have changed (or in this case which are shared and should remained unchanged
+        by being be averaged) between pairs of observations.
+        - custom ratio is an addition, when ratio==0.5 then
+          this is equivalent to the original implementation.
+
+        (✓) Visual inspection against reference implementation:
+            https://github.com/google-research/disentanglement_lib (aggregate_argmax)
+            - Implementation conversion is non-trivial, items are histogram binned.
+              If we are in the second histogram bin, ie. 1, then kl_deltas <= kl_threshs
+            - TODO: (aggregate_labels) An alternative mode exists where you can bind the
+                    latent variables to any individual label, by one-hot encoding which
+                    latent variable should not be shared: "enforce that each dimension
+                    of the latent code learns one factor (dimension 1 learns factor 1)
+                    and enforce that each factor of variation is encoded in a single
+                    dimension."
+        """
+        assert 0 <= ratio <= 1, f"ratio must be in the range: 0 <= ratio <= 1, got: {repr(ratio)}"
+        # threshold τ
+        maximums = z_deltas.max(axis=1, keepdim=True).values  # (B, 1)
+        minimums = z_deltas.min(axis=1, keepdim=True).values  # (B, 1)
+        z_threshs = torch.lerp(minimums, maximums, weight=ratio)  # (B, 1)
+        # true if 'unchanged' and should be average
+        shared_mask = z_deltas < z_threshs  # broadcast (B, Z) and (B, 1) -> (B, Z)
+        # return
+        return shared_mask
+    '''
 
 def kl_loss(z_mean, z_logvar):
     """Compute KL divergence between input Gaussian and Standard Normal."""
