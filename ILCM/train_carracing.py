@@ -5,18 +5,21 @@
 import hydra
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import trange
 from pathlib import Path
 from collections import defaultdict
+from omegaconf import OmegaConf
 from PIL import Image
 from io import BytesIO
+import yaml
 import json
 import os
 
 from CDARL.data.shapes3d_data import Shape3dDataset
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results
+from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
 from torchvision.utils import save_image
 
 from experiment_utils import (
@@ -37,22 +40,28 @@ from model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
 from model import ImageEncoder, ImageDecoder, CoordConv2d
 from training import VAEMetrics
 
-
 @hydra.main(version_base=None, config_path="config", config_name="ilcm")
 def main(cfg):
     """High-level experiment function"""
+    log_dir = os.path.join(cfg.data.save_path, str(date.today()))
+    os.makedirs(log_dir, exist_ok=True)
+
+    # save config
+    with open(os.path.join(log_dir, "config.yaml"), 'w') as f:
+        yaml.dump(OmegaConf.to_yaml(cfg), f)
+
     # Create logs
     results = Results(title="ILCM loss", xlabel="training_step", ylabel="loss")
     results.create_logs(labels=["training_step", "loss", "train_lr"], init_values=[[], [], []])
 
     # Train
     model = create_model(cfg)
-    train(cfg, model, results)
-    save_model(cfg, model)
+    train(cfg, model, results, log_dir)
+    save_model(log_dir, model)
 
     # Save results
-    results.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/ILCM/logs', str(0))
-    results.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/ILCM/logs/0','/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkimages')
+    results.save_logs(cfg.data.save_path, str(date.today()))
+    results.generate_plot(log_dir, log_dir)
 
     logger.info("Anders nog iets?")
 
@@ -142,8 +151,9 @@ def create_intervention_encoder(cfg):
     return intervention_encoder
 
 # noinspection PyTypeChecker
-def train(cfg, model, results):
+def train(cfg, model, results, log_dir):
     """High-level training function"""
+    seed_everything(cfg.general.seed)
 
     logger.info("Starting training")
     logger.info(f"Training on {cfg.training.device}")
@@ -165,99 +175,100 @@ def train(cfg, model, results):
     step = 0
     nan_counter = 0
     epoch_generator = trange(cfg.training.epochs, disable=not cfg.general.verbose)
+
     for epoch in epoch_generator:
+        for i_split in range(cfg.data.num_splitted):
+            for i_batch, imgs in enumerate(data):
 
-        # Graph sampling settings
-        graph_kwargs = determine_graph_learning_settings(cfg, epoch, model)
+                # Graph sampling settings
+                graph_kwargs = determine_graph_learning_settings(cfg, epoch, model)
 
-        # Epoch-based schedules
-        model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
-            cfg, model, epoch, optim
-        )
+                # Epoch-based schedules
+                model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
+                    cfg, model, epoch, optim
+                )
 
-        fractional_epoch = step / steps_per_epoch
+                fractional_epoch = step / steps_per_epoch
 
-        if cfg.data.name == "3dshapes":
-            imgs = data
-            m = int(imgs.shape[2]/2) # 64
-            x1 = imgs[:, :, :m, :] # torch.Size([10, 3, 64, 64])
-            x2 = imgs[:, :, m:, :] # torch.Size([10, 3, 64, 64])
-            saved_imgs = torch.cat([x1, x2], dim=0)
-            save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkimages/model_inputs.png", nrow=10)
+                imgs = imgs.reshape(-1, *imgs.shape[2:])
+                imgs_repeat = imgs.repeat(2, 1, 1, 1)
+                imgs = RandomTransform(imgs_repeat).apply_transformations(nb_class=2, value=None)
+                x1 = imgs[0]
+                x2 = imgs[1]
 
-            model.train()
+                model.train()
 
-            (
-                beta,
-                beta_intervention,
-                consistency_regularization_amount,
-                cyclicity_regularization_amount,
-                edge_regularization_amount,
-                inverse_consistency_regularization_amount,
-                z_regularization_amount,
-                intervention_entropy_regularization_amount,
-                intervention_encoder_offset,
-            ) = step_schedules(cfg, model, fractional_epoch)
+                (
+                    beta,
+                    beta_intervention,
+                    consistency_regularization_amount,
+                    cyclicity_regularization_amount,
+                    edge_regularization_amount,
+                    inverse_consistency_regularization_amount,
+                    z_regularization_amount,
+                    intervention_entropy_regularization_amount,
+                    intervention_encoder_offset,
+                ) = step_schedules(cfg, model, fractional_epoch)
 
-            x1, x2 = (x1.to(device), x2.to(device))
+                x1, x2 = (x1.to(device), x2.to(device))
 
-            # Model forward pass
-            log_prob, model_outputs = model(
-                x1,
-                x2,
-                beta=beta,
-                beta_intervention_target=beta_intervention,
-                pretrain_beta=cfg.training.pretrain_beta,
-                full_likelihood=cfg.training.full_likelihood,
-                likelihood_reduction=cfg.training.likelihood_reduction,
-                pretrain=pretrain,
-                model_interventions=model_interventions,
-                deterministic_intervention_encoder=deterministic_intervention_encoder,
-                intervention_encoder_offset=intervention_encoder_offset,
-                **graph_kwargs,
-            )
+                # Model forward pass
+                log_prob, model_outputs = model(
+                    x1,
+                    x2,
+                    beta=beta,
+                    beta_intervention_target=beta_intervention,
+                    pretrain_beta=cfg.training.pretrain_beta,
+                    full_likelihood=cfg.training.full_likelihood,
+                    likelihood_reduction=cfg.training.likelihood_reduction,
+                    pretrain=pretrain,
+                    model_interventions=model_interventions,
+                    deterministic_intervention_encoder=deterministic_intervention_encoder,
+                    intervention_encoder_offset=intervention_encoder_offset,
+                    **graph_kwargs,
+                )
 
-            # Loss and metrics
-            loss, metrics = criteria(
-                log_prob,
-                z_regularization_amount=z_regularization_amount,
-                edge_regularization_amount=edge_regularization_amount,
-                cyclicity_regularization_amount=cyclicity_regularization_amount,
-                consistency_regularization_amount=consistency_regularization_amount,
-                inverse_consistency_regularization_amount=inverse_consistency_regularization_amount,
-                intervention_entropy_regularization_amount=intervention_entropy_regularization_amount,
-                **model_outputs,
-            )
+                # Loss and metrics
+                loss, metrics = criteria(
+                    log_prob,
+                    z_regularization_amount=z_regularization_amount,
+                    edge_regularization_amount=edge_regularization_amount,
+                    cyclicity_regularization_amount=cyclicity_regularization_amount,
+                    consistency_regularization_amount=consistency_regularization_amount,
+                    inverse_consistency_regularization_amount=inverse_consistency_regularization_amount,
+                    intervention_entropy_regularization_amount=intervention_entropy_regularization_amount,
+                    **model_outputs,
+                )
 
-            # Optimizer step
-            finite, grad_norm = optimizer_step(cfg, loss, model, model_outputs, optim, x1, x2)
-            if not finite:
-                nan_counter += 1
+                # Optimizer step
+                finite, grad_norm = optimizer_step(cfg, loss, model, model_outputs, optim, x1, x2)
+                if not finite:
+                    nan_counter += 1
 
-            # Log loss and metrics
-            step += 1
-            results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
-            results.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/ILCM/logs', str(0))
-            #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
+                # Log loss and metrics
+                step += 1
+                results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
+                results.save_logs(cfg.data.save_path, str(date.today()))
+                #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
 
-            # Save model checkpoint
-            if frequency_check(step, cfg.training.save_model_every_n_steps):
-                save_model(cfg, model, f"model_step_{step}.pt")
-                torch.save(model.encoder.state_dict(), "/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkpoints/ilcm_encoder.pt")
-                imgs1 = x1[10:20]
-                imgs2 = x2[10:20]
-                with torch.no_grad():
-                    recon1, recon2, *_ = model.encode_decode_pair(imgs1, imgs2)
-                saved_imgs = torch.cat([imgs1, imgs2, recon1, recon2], dim=0)
-                save_image(saved_imgs, f"/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkimages/recon_{step}.png", nrow=10)
-                with open(os.path.join(cfg.general.save_path, 'metrics_%s.json' % step), 'w') as f:
-                    json.dump(metrics, f)
-
+                # Save model checkpoint
+                if frequency_check(step, cfg.training.save_model_every_n_steps):
+                    save_model(log_dir, model, f"model_step_{step}.pt")
+                    imgs1 = x1
+                    with torch.no_grad():
+                        recon1 = model.encode_decode(imgs1)
+                    saved_imgs = torch.cat([imgs1, recon1], dim=0)
+                    # save images
+                    path_image = os.path.join(log_dir, f'recon_{step}.png')
+                    save_image(saved_imgs, path_image, nrow=10)
+                    results.generate_plot(log_dir,log_dir)
+                    # save metrics
+                    with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
+                        json.dump(metrics, f)
 
         # LR scheduler
         if scheduler is not None and epoch < cfg.training.epochs - 1:
             scheduler.step()
-            results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
 
             # Optionally reset Adam stats
             if (
@@ -277,17 +288,11 @@ def train(cfg, model, results):
 def get_dataloader(cfg, batchsize=32, shuffle=False, include_noise_encodings=False):
     """Load data from disk and return DataLoader instance"""
     logger.debug(f"Loading data {cfg.data.name}")
-    if cfg.data.name == "carracing":
-        transform = transforms.Compose([transforms.ToTensor()])
-        dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
-        loader = DataLoader(dataset, batch_size=cfg.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
-        logger.debug(f"Finished loading data {cfg.data.name}")
-        return loader
-    elif cfg.data.name == "3dshapes":
-        dataset = Shape3dDataset()
-        dataset.load_dataset(file_dir=cfg.data.data_dir)
-        logger.debug(f"Finished loading data {cfg.data.name}")
-        return dataset.create_weak_vae_batch(cfg.training.batchsize, cfg.training.device, k=2)
+    transform = transforms.Compose([transforms.ToTensor()])
+    dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+    loader = DataLoader(dataset, batch_size=cfg.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
+    logger.debug(f"Finished loading data {cfg.data.name}")
+    return loader
 
 def updateloader(loader, dataset):
     dataset.loadnext()

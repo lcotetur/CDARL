@@ -26,7 +26,6 @@ def initialize_experiment(cfg):
 
     # Set up MLflow tracking location
     Path(cfg.general.mlflow.db).parent.mkdir(exist_ok=True)
-    mlflow.set_tracking_uri(f"sqlite:///{Path(cfg.general.mlflow.db).resolve()}")
 
     # Create MLflow experiment if it doesn't exist already
     Path(cfg.general.mlflow.artifacts).mkdir(exist_ok=True)
@@ -153,13 +152,13 @@ def flatten_dict(d, parent_key="", sep="."):
     return dict(items)
 
 
-def save_model(cfg, model, filename="model.pt"):
+def save_model(log_dir, model, filename="model.pt"):
     """Saves the model's state dict"""
 
     # Store model in experiment folder
-    model_path = Path(cfg.general.exp_dir) / "checkpoints" / filename
-    logger.debug(f"Saving model at {model_path}")
-    torch.save(model.state_dict(), model_path)
+    path = os.path.join(log_dir, filename)
+    logger.debug(f"Saving model at {path}")
+    torch.save(model.state_dict(), path)
 
 
 def compute_metrics_on_dataset(cfg, model, criteria, data_loader, device):

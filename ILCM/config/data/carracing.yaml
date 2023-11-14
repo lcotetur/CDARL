@@ -1,0 +1,9 @@
+name: carracing
+data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data'
+save_path: /home/mila/l/lea.cote-turcotte/CDARL/ILCM/logs/carracing
+data_tag: 'car'
+num_splitted: 10
+
+dim_x: [3, 64, 64]
+dim_z: 12
+noise: 0
