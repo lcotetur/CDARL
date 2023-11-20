@@ -192,9 +192,18 @@ def train(cfg, model, results, log_dir):
 
                 imgs = imgs.reshape(-1, *imgs.shape[2:])
                 imgs_repeat = imgs.repeat(2, 1, 1, 1)
-                imgs = RandomTransform(imgs_repeat).apply_transformations(nb_class=2, value=None)
-                x1 = imgs[0]
-                x2 = imgs[1]
+                if cfg.data.training.random_augmetations:
+                    imgs = RandomTransform(imgs_repeat).apply_transformations(nb_class=2, value=None)
+                    x1 = imgs[0]
+                    x2 = imgs[1]
+                else:
+                    imgs = imgs_repeat
+                    n = imgs.shape[0]
+                    print(imgs.shape[0])
+                    x1 = imgs[:int(n/2), :, :, :]
+                    print(x1.shape)
+                    x2 = imgs[int(n/2):, :, :, :]
+            
 
                 model.train()
 
@@ -290,13 +299,13 @@ def get_dataloader(cfg, batchsize=32, shuffle=False, include_noise_encodings=Fal
     logger.debug(f"Loading data {cfg.data.name}")
     transform = transforms.Compose([transforms.ToTensor()])
     dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
-    loader = DataLoader(dataset, batch_size=cfg.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
+    loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
     logger.debug(f"Finished loading data {cfg.data.name}")
     return loader
 
 def updateloader(loader, dataset):
     dataset.loadnext()
-    loader = DataLoader(dataset, batch_size=cfg.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
+    loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
     return loader
 
 def epoch_schedules(cfg, model, epoch, optim):

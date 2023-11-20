@@ -15,18 +15,23 @@ from metrics import gaussian_total_correlation, gaussian_wasserstein_correlation
 from metrics import compute_mig, mutual_information_score, compute_dci
 from CDARL.data.shapes3d_data import Shape3dDataset
 
+from CDARL.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
+from CDARL.utils import seed_everything
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
 parser.add_argument('--batch-size', default=16, type=int)
 parser.add_argument('--num-train', default=100, type=int) #10000
 parser.add_argument('--num-test', default=50, type=int) #5000
 parser.add_argument('--num-workers', default=4, type=int)
-parser.add_argument('--encoder-type', default='gvae', type=str)
+parser.add_argument('--encoder-type', default='ilcm', type=str)
 parser.add_argument('--num-episodes', default=1, type=int)
 parser.add_argument('--eval-steps', default=2, type=int)
 parser.add_argument('--supervised', default=True, type=bool)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/GVAE/checkpoints/model_gvae_3dshapes.pt', type=str)
-parser.add_argument('--latent-size', default=12, type=int)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkpoints/model_step_100000.pt', type=str)
+parser.add_argument('--latent-size', default=8, type=int)
+parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
 parser.add_argument('--work-dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 args = parser.parse_args()
@@ -35,7 +40,75 @@ def reconstruction_loss(x, recon_x):
     recon_loss = F.mse_loss(x, recon_x, reduction='mean')
     return recon_loss
 
+######## ilcm model #########
+def create_model():
+    # Create model
+    scm = create_scm()
+    encoder, decoder = create_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=args.latent_size,
+            )
+    return model
+
+def create_scm():
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=args.latent_size,
+            min_std=0.2,
+        )
+
+    return scm
+
+def create_encoder_decoder():
+    encoder = ImageEncoder(
+            in_resolution=64,
+            in_features=3,
+            out_features=args.latent_size,
+            hidden_features=32,
+            batchnorm=False,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            min_std=1.e-3,
+            permutation=0,
+            )
+    decoder = ImageDecoder(
+            in_features=args.latent_size,
+            out_resolution=64,
+            out_features=3,
+            hidden_features=32,
+            batchnorm=False,
+            min_std=1.0,
+            fix_std=True,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            permutation=0,
+            )
+    return encoder, decoder
+
+def create_intervention_encoder():
+    intervention_encoder = HeuristicInterventionEncoder()
+    return intervention_encoder
+
+
 ######## models ##########
+
 # Encoder download weights GVAE
 class EncoderG(nn.Module):
     def __init__(self, style_dim = 8, class_dim = 16, input_channel = 3, flatten_size = 1024):
@@ -171,25 +244,25 @@ class MyModel(nn.Module):
         nn.Module.__init__(self)
         self.encoder_type = encoder_type
 
-        # evaluate policy with end-to-end training
+        # evaluate with end-to-end training
         if self.encoder_type == 'end_to_end':
             latent_size = 16
             self.encoder = EncoderE(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
             self.decoder = Decoder(latent_size)
 
-        # evaluate policy entangle representation
+        # evaluate entangle representation
         elif self.encoder_type == 'vae':
             latent_size = 12
             self.encoder = Encoder(latent_size=latent_size)
             self.decoder = Decoder(latent_size)
 
-        # evaluate policy invariant representation
+        # evaluate invariant representation
         elif self.encoder_type == 'adagvae':
             latent_size = args.latent_size
             self.encoder = Encoder(latent_size=latent_size)
             self.decoder = Decoder(latent_size)
 
-        # evaluate policy disentangled representation
+        # evaluate disentangled representation
         elif self.encoder_type == 'cycle_vae':
             class_latent_size = 8
             content_latent_size = 32
@@ -197,13 +270,22 @@ class MyModel(nn.Module):
             self.encoder = EncoderD(class_latent_size, content_latent_size)
             self.decoder = Decoder(latent_size)
 
-        # evaluate policy disentangled representation
+        # evaluate disentangled representation
         elif self.encoder_type == 'gvae':
             class_latent_size = 8
             content_latent_size = 32
             latent_size = class_latent_size + content_latent_size
             self.encoder = EncoderG(class_latent_size, content_latent_size)
             self.decoder = Decoder(latent_size)
+
+        # evaluate representation ilcm
+        elif self.encoder_type == 'ilcm':
+            latent_size = 8
+            self.model = create_model()
+
+            weights = torch.load(args.model_path, map_location=torch.device('cpu'))
+            self.model.load_state_dict(weights)
+            print("Loaded Weights")
 
     def forward(self, x):
         with torch.no_grad():
@@ -218,12 +300,17 @@ class MyModel(nn.Module):
                 mu_s, _, mu, _ = self.encoder(x)
                 features = torch.cat([mu_s, mu], dim=1)
                 recon = self.decoder(features)
+            elif self.encoder_type == 'ilcm':
+                features = self.model.encode_to_causal(x)
+                recon = self.model.encode_decode(x)
         return features, recon
 
 def evaluate():
+    seed_everything(args.seed)
     model = MyModel(args.encoder_type)
-    weights = torch.load(args.model_path, map_location=torch.device('cpu'))
-    model.load_state_dict(weights)
+    if args.encoder_type != 'ilcm':
+        weights = torch.load(args.model_path, map_location=torch.device('cpu'))
+        model.load_state_dict(weights)
     device = torch.device('cpu')
 
     # create dataset
@@ -235,7 +322,9 @@ def evaluate():
 
     img_batch = dataset.sample_random_batch(args.num_train)
     img_batch = dataset.process_obs(img_batch, device)
-    _, recon = model(img_batch)
+    feature, recon = model(img_batch)
+    save_image(img_batch, "/home/mila/l/lea.cote-turcotte/CDARL/evaluate/3dshapes_%s_img.png" % (args.encoder_type))
+    save_image(recon, "/home/mila/l/lea.cote-turcotte/CDARL/evaluate/3dshapes_%s_recon.png" % (args.encoder_type))
     recon_loss = reconstruction_loss(img_batch, recon)
     results['recon_loss'] = recon_loss.item()
     saved_imgs = torch.cat([img_batch[:10], recon[:10]], dim=0)

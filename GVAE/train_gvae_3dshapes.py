@@ -11,7 +11,7 @@ import argparse
 import os
 
 from CDARL.data.shapes3d_data import Shape3dDataset
-from utils import reparameterize
+from CDARL.utils import reparameterize, seed_everything
 from model import GVAE
 
 parser = argparse.ArgumentParser()
@@ -24,6 +24,7 @@ parser.add_argument('--learning-rate', default=0.0001, type=float)
 parser.add_argument('--beta', default=1, type=int)
 parser.add_argument('--save-freq', default=100, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
+parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--class-latent-size', default=8, type=int) # 4
 parser.add_argument('--content-latent-size', default=16, type=int) # 8
 parser.add_argument('--flatten-size', default=1024, type=int)
@@ -51,6 +52,8 @@ def gvae_loss(x, model, beta=1):
 
 
 def main():
+    seed_everything(args.seed)
+
     # create directory
     if not os.path.exists("checkpoints"):
         os.makedirs("checkpoints")

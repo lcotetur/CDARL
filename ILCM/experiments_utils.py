@@ -15,7 +15,6 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 logging_initialized = False
 
-
 # noinspection PyUnresolvedReferences
 def initialize_experiment(cfg):
     """Initialize experiment folder (and plenty of other initialization thingies)"""

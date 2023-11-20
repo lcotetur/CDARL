@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 from torch.utils.data import Dataset, DataLoader
-from skimage.util.shape import view_as_windows
+#from skimage.util.shape import view_as_windows
 from torchvision import transforms
 import os
 import numpy as np
@@ -27,6 +27,12 @@ def count_step(i_update, i_env, i_step, num_envs, num_steps):
     step = i_update * (num_steps *  num_envs) + i_env * num_steps + i_step
     return step
 
+
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
 
 # for representation learning
 class ExpDataset(Dataset):

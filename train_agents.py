@@ -14,18 +14,23 @@ import cv2
 import numpy as np
 import argparse
 from torchvision.utils import save_image
+from tqdm import trange
 
-from model import Encoder
+from CDARL.VAE.vae import Encoder
+
+from CDARL.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
+from CDARL.utils import seed_everything
 
 
 ######## Args Setting ##########
 parser = argparse.ArgumentParser()
-parser.add_argument('--policy-type', default='adagvae', type=str)
+parser.add_argument('--policy-type', default='ilcm', type=str)
 parser.add_argument('--ray-adress', default='auto', type=str)
 parser.add_argument('--save-freq', default=100, type=int)
 parser.add_argument('--train-epochs', default=5000, type=int)
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkpoints/encoder_adagvae_32.pt')
-parser.add_argument('--model-save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_ada.pt', type=str)
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkpoints/model_step_130000_carracing.pt')
+parser.add_argument('--model-save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_ilcm.pt', type=str)
 parser.add_argument('--train-encoder', default=False, type=bool)
 parser.add_argument('--num-workers', default=1, type=int)
 parser.add_argument('--num-envs-per-worker', default=2, type=int)
@@ -37,6 +42,7 @@ parser.add_argument('--vf-clip-param', default=1000, type=int)
 parser.add_argument('--reward-wrapper', default=True, type=bool, help='whether using reward wrapper so that avoid -100 penalty')
 parser.add_argument('--lr', default=0.0002, type=float)
 parser.add_argument('--kl-coeff', default=0, type=float)
+parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--num-sgd-iter', default=10, type=int)
 parser.add_argument('--sgd-minibatch-size', default=200, type=int)
 parser.add_argument('--grad-clip', default=0.1, type=float, help='other implementations may refer as max_grad_norm')
@@ -44,7 +50,8 @@ parser.add_argument('--rollout-fragment-length', default=250, type=int)
 parser.add_argument('--train-batch-size', default=2000, type=int)
 parser.add_argument('--clip-param', default=0.1, type=float, help='other implementations may refer as clip_ratio')
 parser.add_argument('--action-repeat', default=4, type=int)
-parser.add_argument('--latent-size', default=16, type=int)
+parser.add_argument('--latent-size', default=8, type=int)
+parser.add_argument('--verbose', default=True, type=bool)
 args = parser.parse_args()
 
 
@@ -64,13 +71,14 @@ def choose_env(worker_index):
 class MyEnvRewardWrapper(gym.Env):
     def __init__(self, env_config):
         self.env = gym.make(choose_env(env_config.worker_index))
+        self.env.seed(args.seed)
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
         self.observation_space = Box(low=0, high=255, shape=(3,64,64), dtype=self.env.observation_space.dtype)
 
     def reset(self):
         obs = self.env.reset()
-        processed_obs =  process_obs(obs)
+        processed_obs = process_obs(obs)
         return processed_obs
 
     def step(self, action):
@@ -86,6 +94,72 @@ class MyEnvRewardWrapper(gym.Env):
         return processed_obs, rewards, done, info
 
 register_env("myenv", lambda config: MyEnvRewardWrapper(config))
+
+####### ilcm model #########
+def create_model():
+    # Create model
+    scm = create_scm()
+    encoder, decoder = create_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=args.latent_size,
+            )
+    return model
+
+def create_scm():
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=args.latent_size,
+            min_std=0.2,
+        )
+
+    return scm
+
+def create_encoder_decoder():
+    encoder = ImageEncoder(
+            in_resolution=63,
+            in_features=3,
+            out_features=args.latent_size,
+            hidden_features=32,
+            batchnorm=False,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            min_std=1.e-3,
+            permutation=0,
+            )
+    decoder = ImageDecoder(
+            in_features=args.latent_size,
+            out_resolution=64,
+            out_features=3,
+            hidden_features=32,
+            batchnorm=False,
+            min_std=1.0,
+            fix_std=True,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            permutation=0,
+            )
+    return encoder, decoder
+
+def create_intervention_encoder():
+    intervention_encoder = HeuristicInterventionEncoder()
+    return intervention_encoder
 
 
 ######## Model Setting ##########
@@ -197,7 +271,7 @@ class MyModel(TorchModelV2, nn.Module):
         self.policy_type = custom_config['policy_type']
         latent_size = custom_config['latent_size']
 
-        # evaluate policy with end-to-end training
+        # train policy with end-to-end training
         if self.policy_type == 'end_to_end':
             print('end-to-end')
             latent_size = 32
@@ -214,7 +288,7 @@ class MyModel(TorchModelV2, nn.Module):
             else:
                 print("No Load Weights")
         
-        # evaluate policy invariant representation
+        # train policy invariant representation
         elif self.policy_type == 'invar':
             print('invariant')
             latent_size = 32
@@ -231,10 +305,10 @@ class MyModel(TorchModelV2, nn.Module):
             else:
                 print("No Load Weights")
 
-        # evaluate policy invariant representation
+        # train policy invariant representation
         elif self.policy_type == 'adagvae':
             print('adagvae')
-            latent_size = 32
+            latent_size = 16
             self.main = Encoder(latent_size=latent_size)
 
             if custom_config['encoder_path'] is not None:
@@ -248,7 +322,7 @@ class MyModel(TorchModelV2, nn.Module):
             else:
                 print("No Load Weights")
 
-        # evaluate policy entangle representation
+        # train policy entangle representation
         elif self.policy_type == 'repr':
             print('entangle')
             latent_size = 32
@@ -265,7 +339,7 @@ class MyModel(TorchModelV2, nn.Module):
             else:
                 print("No Load Weights")
 
-        # evaluate policy disentangled representation
+        # train policy disentangled representation
         elif self.policy_type == 'disent':
             print('disentangle')
             class_latent_size = 8
@@ -284,8 +358,24 @@ class MyModel(TorchModelV2, nn.Module):
             else:
                 print("No Load Weights")
             
+       # train policy causal representation
+        elif self.policy_type == 'ilcm':
+            print('causal')
+            latent_size = 8
+            self.main = create_model()
+
+            if custom_config['encoder_path'] is not None:
+                # saved checkpoints could contain extra weights such as linear_logsigma 
+                weights = torch.load(custom_config['encoder_path'], map_location=torch.device('cpu'))
+                for k in list(weights.keys()):
+                    if k not in self.main.state_dict().keys():
+                        del weights[k]
+                self.main.load_state_dict(weights)
+                print("Loaded Weights")
+            else:
+                print("No Load Weights")
     
-        # evaluate policy no encoder
+        # train policy no encoder
         elif self.policy_type == 'ppo'  or self.policy_type == 'augm':
             print('ppo')
             latent_size = 2*2*256
@@ -346,6 +436,10 @@ class MyModel(TorchModelV2, nn.Module):
                 features = features.detach() 
         elif self.policy_type == 'invar':
             features = self.main(input_dict['obs'].float())
+            if not self.train_encoder:
+                features = features.detach() 
+        elif self.policy_type == 'ilcm':
+            features = self.main.encode_to_causal(input_dict['obs'].float())
             if not self.train_encoder:
                 features = features.detach() 
         '''
@@ -413,6 +507,7 @@ ModelCatalog.register_custom_action_dist("mydist", MyDist)
 
 ########### Do Training #################
 def main():
+    seed_everything(args.seed)
     print(f'policy type is {args.policy_type}, do not forget to change the name of model_save_path')
     print(f'ray adress is {args.ray_adress}')
     ray.init(address=args.ray_adress, redis_password='5241590000000000')
@@ -440,6 +535,7 @@ def main():
         "rollout_fragment_length":args.rollout_fragment_length,
         "train_batch_size":args.train_batch_size,
         "sgd_minibatch_size":args.sgd_minibatch_size,
+        'seed': args.seed 
         })
 
     for i in range(args.train_epochs):

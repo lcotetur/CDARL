@@ -12,6 +12,8 @@ salloc --gres=gpu:1 -c 4 --mem=32G -t 30:00:00 --partition=unkillable --constrai
 
 module load anaconda/3 
 
+module load singularity
+
 conda activate LUSR
 
 # canvas display
@@ -40,7 +42,13 @@ python ppo_agent_stack.py
 python evaluate_stack.py --policy-type ppo
 
 # agents training on carracing
-python train_agents.py  --train-epochs 1000 --ray-adress 'localhost:46468' --policy-type adagvae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkpoints/encoder_adagvae_32.pt --model-save-path /home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_adagvae_32.pt
+python train_agents.py  --train-epochs 800 --ray-adress 'localhost:46468' --policy-type adagvae --seed 1 --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/checkpoints/encoder_adagvae_32.pt --model-save-path /home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_adagvae_32.pt
 
 # evaluate the trained agents on carracing games
 python evaluate/evaluate_agents.py --policy-type adagvae --model-path /home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_adagvae_32.pt
+
+# to connect container to compute node 
+rsync -avz /network/scratch/l/lea.cote-turcotte/mujoco.sif $SLURM_TMPDIR
+
+# open container shell to run code
+singularity shell --nv -H $HOME:/home/mila/l/lea.cote-turcotte $SLURM_TMPDIR/mujoco.sif

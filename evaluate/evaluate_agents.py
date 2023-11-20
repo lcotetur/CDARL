@@ -6,13 +6,16 @@ from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from ray.rllib.models import ModelCatalog, ActionDistribution
 from ray.rllib.utils.annotations import override
 from video import VideoRecorder
-from utils import RandomTransform
+from CDARL.utils import RandomTransform, seed_everything
 
 import torch
 import torch.nn as nn
 from torch.distributions import Normal, Beta
 from torch.distributions.kl import kl_divergence
 from torchvision.utils import save_image
+
+from CDARL.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
 
 import gym
 import cv2
@@ -22,17 +25,18 @@ import argparse
 import time
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--policy-type', default='end-to-end', type=str)
+parser.add_argument('--policy-type', default='ilcm', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_disent.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_ilcm.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
-parser.add_argument('--latent-size', default=16, type=int)
-parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
+parser.add_argument('--latent-size', default=8, type=int)
+parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
 parser.add_argument('--action-repeat', default=4, type=int)
+parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--save_video', default=True, action='store_true')
-parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/LUSR', type=str)
+parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 parser.add_argument('--nb_domain', default=4, type=int)
 args = parser.parse_args()
 
@@ -43,6 +47,72 @@ def process_obs(obs): # input single frame (96, 96, 3) for CarRacing
     obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
     obs = np.transpose(obs, (2,0,1))
     return torch.from_numpy(obs).unsqueeze(0)
+
+######## ilcm model #########
+def create_model():
+    # Create model
+    scm = create_scm()
+    encoder, decoder = create_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=args.latent_size,
+            )
+    return model
+
+def create_scm():
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=args.latent_size,
+            min_std=0.2,
+        )
+
+    return scm
+
+def create_encoder_decoder():
+    encoder = ImageEncoder(
+            in_resolution=64,
+            in_features=3,
+            out_features=args.latent_size,
+            hidden_features=32,
+            batchnorm=False,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            min_std=1.e-3,
+            permutation=0,
+            )
+    decoder = ImageDecoder(
+            in_features=args.latent_size,
+            out_resolution=64,
+            out_features=3,
+            hidden_features=32,
+            batchnorm=False,
+            min_std=1.0,
+            fix_std=True,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            permutation=0,
+            )
+    return encoder, decoder
+
+def create_intervention_encoder():
+    intervention_encoder = HeuristicInterventionEncoder()
+    return intervention_encoder
 
 ######## models ##########
 # Encoder download weights invar
@@ -174,6 +244,11 @@ class MyModel(nn.Module):
             content_latent_size = 32
             latent_size = class_latent_size + content_latent_size
             self.main = EncoderD(class_latent_size, content_latent_size)
+
+        # evaluate representation ilcm
+        elif self.policy_type == 'ilcm':
+            latent_size = 8
+            self.main = create_model()
     
         # evaluate policy no encoder
         elif self.policy_type == 'ppo' or self.policy_type == 'augm':
@@ -201,6 +276,8 @@ class MyModel(nn.Module):
                 features = torch.cat([content, style], dim=1)
             elif self.policy_type == 'repr' or self.policy_type == 'adagvae':
                 features, _, = self.main(x)
+            elif self.policy_type == 'ilcm':
+                features = self.main.encode_to_causal(x)
             else:
                 features = self.main(x)
             actor_features = self.actor(features)
@@ -224,11 +301,13 @@ class MyModel(nn.Module):
 
 ########### Do Evaluation #################
 def main():
+    seed_everything(args.seed)
 
     video_dir = os.path.join(args.work_dir, 'video')
     video = VideoRecorder(video_dir if args.save_video else None)
 
     env = gym.make(args.env)
+    env.seed(args.seed)
     model = MyModel(args.policy_type, args.deterministic_sample, args.latent_size)
     weights = torch.load(args.model_path, map_location=torch.device('cpu'))
     model.load_state_dict(weights)
@@ -263,8 +342,8 @@ def main():
                     env.render()
                 obs = process_obs(obs)
                 new_obs = RandomTransform(obs).domain_transformation(color, blur)
-                save_image(new_obs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/obs_%d.png" % (domain))
-            video.save('%d_%d.mp4' % (domain, i))
+                save_image(new_obs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/obs_%d.png" % (domain))
+            video.save('%d_%s.mp4' % (domain, args.policy_type))
             results.append(episode_reward)
 
         print('Evaluate %d episodes and achieved %f scores in domain %d' % (args.num_episodes, np.mean(results), domain))

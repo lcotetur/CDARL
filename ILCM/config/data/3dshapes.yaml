@@ -1,6 +1,9 @@
 name: 3dshapes
 data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5'
-save_path: /home/mila/l/lea.cote-turcotte/CDARL/ILCM/logs/3dshapes
+save_path: /home/mila/l/lea.cote-turcotte/CDARL/ILCM/runs/3dshapes
+
+training:
+  batch_size: 32
 
 dim_x: [3, 64, 64]
 dim_z: 12

@@ -8,8 +8,8 @@ import nflows.transforms
 import nflows.utils
 import nflows.distributions
 
-from nets import make_mlp, make_elementwise_mlp
-from experiment_utils import mask, clean_and_clamp
+from CDARL.ILCM.nets import make_mlp, make_elementwise_mlp
+from CDARL.ILCM.experiment_utils import mask, clean_and_clamp
 
 import itertools
 import numpy as np
@@ -46,16 +46,6 @@ class ImplicitSCM(nn.Module):
         self.register_buffer("topological_order", torch.zeros(dim_z, dtype=torch.long))
 
         self.set_causal_structure(graph, causal_structure)
-
-    def sample(self, n, intervention=None, graph_mode="hard", graph_temperature=1.0):
-        """Samples a single latent vector, either observed or under an intervention"""
-
-        raise NotImplementedError
-
-    def sample_weakly_supervised(self, n, intervention, graph_mode="hard", graph_temperature=1.0):
-        """Samples in the weakly supervised setting for a given intervention"""
-
-        raise NotImplementedError
 
     def sample_noise_weakly_supervised(self, n, intervention, adjacency_matrix=None):
         """Samples in the weakly supervised setting for a given intervention"""
@@ -1004,7 +994,7 @@ class ILCM(nn.Module):
         encoder,
         decoder,
         intervention_encoder,
-        dim_z,
+        dim_z=8,
         intervention_prior=None,
         intervention_set="atomic_or_none",
         averaging_strategy="stochastic",

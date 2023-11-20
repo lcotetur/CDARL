@@ -7,27 +7,30 @@ import json
 
 from metrics import gaussian_total_correlation, gaussian_wasserstein_correlation, gaussian_wasserstein_correlation_norm
 from metrics import compute_mig, mutual_information_score, compute_dci
-from LUSR.utils import ExpDataset, reparameterize, RandomTransform
+from CDARL.utils import ExpDataset, reparameterize, RandomTransform, seed_everything
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
 
+from CDARL.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/LUSR/data/carracing_data', type=str, help='path to the data')
+parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
 parser.add_argument('--data-tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--batch-size', default=10, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
-parser.add_argument('--encoder-type', default='vae', type=str)
+parser.add_argument('--encoder-type', default='ilcm', type=str)
 parser.add_argument('--num-episodes', default=1, type=int)
 parser.add_argument('--eval_steps', default=100, type=int)
 parser.add_argument('--supervised', default=False, type=bool)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/model_vae.pt', type=str)
-parser.add_argument('--latent-size', default=32, type=int)
-parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
-parser.add_argument('--work-dir', default='/home/mila/l/lea.cote-turcotte/LUSR', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkpoints/model_step_130000_carracing.pt', type=str)
+parser.add_argument('--latent-size', default=8, type=int)
+parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
+parser.add_argument('--work-dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 args = parser.parse_args()
 
 def updateloader(loader, dataset):
@@ -38,6 +41,72 @@ def updateloader(loader, dataset):
 def reconstruction_loss(x, recon_x):
     recon_loss = F.mse_loss(x, recon_x, reduction='mean')
     return recon_loss
+
+######## ilcm model #########
+def create_model():
+    # Create model
+    scm = create_scm()
+    encoder, decoder = create_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=args.latent_size,
+            )
+    return model
+
+def create_scm():
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=args.latent_size,
+            min_std=0.2,
+        )
+
+    return scm
+
+def create_encoder_decoder():
+    encoder = ImageEncoder(
+            in_resolution=64,
+            in_features=3,
+            out_features=args.latent_size,
+            hidden_features=32,
+            batchnorm=False,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            min_std=1.e-3,
+            permutation=0,
+            )
+    decoder = ImageDecoder(
+            in_features=args.latent_size,
+            out_resolution=64,
+            out_features=3,
+            hidden_features=32,
+            batchnorm=False,
+            min_std=1.0,
+            fix_std=True,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            permutation=0,
+            )
+    return encoder, decoder
+
+def create_intervention_encoder():
+    intervention_encoder = HeuristicInterventionEncoder()
+    return intervention_encoder
 
 ######## models ##########
 # Encoder download weights cycle_vae
@@ -169,6 +238,15 @@ class MyModel(nn.Module):
             self.encoder = EncoderD(class_latent_size, content_latent_size)
             self.decoder = Decoder(latent_size)
 
+        # evaluate representation ilcm
+        elif self.encoder_type == 'ilcm':
+            latent_size = 8
+            self.model = create_model()
+
+            weights = torch.load(args.model_path, map_location=torch.device('cpu'))
+            self.model.load_state_dict(weights)
+            print("Loaded Weights")
+
     def forward(self, x):
         with torch.no_grad():
             if self.encoder_type == 'cycle_vae':
@@ -181,6 +259,9 @@ class MyModel(nn.Module):
             elif self.encoder_type == 'cycle_vae_invar':
                 features, _, style = self.encoder(x)
                 recon = self.decoder(features)
+            elif self.encoder_type == 'ilcm':
+                features = self.model.encode_to_causal(x)
+                recon = self.model.encode_decode(x)
         return features, recon
 
 def evaluate():
@@ -197,9 +278,11 @@ def evaluate():
         random_seed: Integer with random seed used for training.
         name: Optional string with name of the metric (can be used to name metrics).
     """
+    seed_everything(args.seed)
     model = MyModel(args.encoder_type)
-    weights = torch.load(args.model_path, map_location=torch.device('cpu'))
-    model.load_state_dict(weights)
+    if args.encoder_type != 'ilcm':
+        weights = torch.load(args.model_path, map_location=torch.device('cpu'))
+        model.load_state_dict(weights)
     device = torch.device('cpu')
 
     # create dataset and loader
@@ -246,7 +329,7 @@ def evaluate():
         results['mututal_info_score'].append(mututal_info_score)
 
         saved_imgs = torch.cat([imgs, recon], dim=0)
-        save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/LUSR/evaluate/%s.png" % (args.encoder_type))
+        save_image(saved_imgs, "/home/mila/l/lea.cote-turcotte/CDARL/evaluate/%s.png" % (args.encoder_type))
 
         if i_batch == args.eval_steps:
             total_score_gauss = np.mean(results['gaussian_total_corr'])
