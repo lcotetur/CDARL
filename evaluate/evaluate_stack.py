@@ -6,10 +6,11 @@ from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from ray.rllib.models import ModelCatalog, ActionDistribution
 from ray.rllib.utils.annotations import override
 from video import VideoRecorder
-from utils import RandomTransform
+from CDARL.utils import RandomTransform
 
 import torch
 import torch.nn as nn
+import warnings
 from torch.distributions import Normal, Beta
 from torch.distributions.kl import kl_divergence
 from torchvision.utils import save_image
@@ -22,19 +23,19 @@ import argparse
 import time
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--policy-type', default='ppo', type=str)
+parser.add_argument('--policy-type', default='ppo_drq', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ppo_stack.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/logs/drq_ppo/2023-12-19_0/policy_ppo_stack.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
-parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/LUSR/results', type=str)
+parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
 parser.add_argument('--action-repeat', default=4, type=int)
 parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--save_video', default=True, action='store_true')
-parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/LUSR', type=str)
+parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 parser.add_argument('--nb_domain', default=4, type=int)
 args = parser.parse_args()
 
@@ -143,6 +144,30 @@ class EncoderE(nn.Module):
         mu, logsigma, classcode = self.forward(x)
         return mu
 
+class EncoderBase(nn.Module):
+    def __init__(self):
+        super(EncoderBase, self).__init__()
+        self.cnn_base = nn.Sequential(
+            nn.Conv2d(12, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+        )
+        self.out_dim = 2*2*256
+        self.apply(self._weights_init)
+
+    @staticmethod
+    def _weights_init(m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+            nn.init.constant_(m.bias, 0.1)
+
+    def forward(self, x):
+        x = self.cnn_base(x)
+        x = x.view(x.size(0), -1)
+
+        return x
+
 class MyModel(nn.Module):
     def __init__(self, policy_type, deterministic_sample=False, latent_size=16):
         nn.Module.__init__(self)
@@ -180,6 +205,10 @@ class MyModel(nn.Module):
                     nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
                 )
 
+        elif self.policy_type == 'ppo_curl' or self.policy_type == 'ppo_drq':
+            latent_size = 2*2*256
+            self.cnn_base = EncoderBase()
+
         self.critic = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
         self.actor = nn.Sequential(nn.Linear(latent_size, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
         self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
@@ -188,7 +217,7 @@ class MyModel(nn.Module):
 
     def forward(self, x):
         with torch.no_grad():
-            if self.policy_type == 'ppo' or self.policy_type == 'augm':
+            if self.policy_type == 'ppo' or self.policy_type == 'augm' or self.policy_type == 'ppo_curl':
                 x = self.cnn_base(x)
                 features = x.view(x.size(0), -1)
             elif self.policy_type == 'disent':
@@ -196,6 +225,8 @@ class MyModel(nn.Module):
                 features = torch.cat([content, style], dim=1)
             elif self.policy_type == 'repr':
                 features, _, = self.main(x)
+            elif self.policy_type == 'ppo_curl' or self.policy_type == 'ppo_drq':
+                features = self.cnn_base(x)
             else:
                 features = self.main(x)
             actor_features = self.actor(features)
@@ -219,14 +250,18 @@ class MyModel(nn.Module):
 
 ########### Do Evaluation #################
 def main():
-
+    warnings.filterwarnings("ignore")
     video_dir = os.path.join(args.work_dir, 'video')
     video = VideoRecorder(video_dir if args.save_video else None)
 
     env = gym.make(args.env)
     model = MyModel(args.policy_type, args.deterministic_sample, args.latent_size)
     weights = torch.load(args.model_path, map_location=torch.device('cpu'))
+    for k in list(weights.keys()):
+        if k not in model.state_dict().keys():
+            del weights[k]
     model.load_state_dict(weights)
+    print("Loaded Weights")
 
     domains_results = []
     domains_means = []
@@ -246,7 +281,7 @@ def main():
             obs = process_obs(obs)
             new_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, blur)
             stack = [np.array(new_obs)] * args.img_stack
-            new_obs = np.array(stack).reshape(12, 64, 64)
+            new_obs = np.concatenate(stack, axis=0)
             video.init(enabled=((i == 0) or (i == 99)))
             while not done:
                 obs = torch.from_numpy(new_obs).float().unsqueeze(0)
@@ -255,11 +290,12 @@ def main():
                     obs, reward, done, info = env.step(action)
                     obs = process_obs(obs)
                     t_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, blur)
-                    save_image(t_obs, "/home/mila/l/lea.cote-turcotte/LUSR/figures/obs_%d.png" % (domain))
+                    print(obs.shape)
+                    save_image(t_obs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/obs_%d.png" % (domain))
                     stack.pop(0)
                     stack.append(np.array(t_obs))
                     assert len(stack) == args.img_stack
-                    new_obs = np.array(stack).reshape(12, 64, 64)
+                    new_obs = np.concatenate(stack, axis=0)
                     episode_reward += reward
                     if done:
                         break

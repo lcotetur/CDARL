@@ -10,11 +10,18 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Beta
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
-from utils import Resutls
 import cv2
+import os
+import warnings
 from torchvision.utils import save_image
+from CDARL.VAE.vae import Encoder
+from CDARL.CYCLEVAE.cycle_vae import EncoderD
+from CDARL.utils import seed_everything, Results, transform, create_logs, random_shift, random_crop
 
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
+parser.add_argument('--algo', default='cycle_vae', type=str)
+parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/logs", type=str)
+parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/CYCLEVAE/runs/carracing/2023-12-19/encoder_cycle_vae_stack.pt', type=str)
 parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
 parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
@@ -24,12 +31,6 @@ parser.add_argument('--render', action='store_true', help='render the environmen
 parser.add_argument(
     '--log-interval', type=int, default=10, metavar='N', help='interval between training status logs (default: 10)')
 args = parser.parse_args()
-
-use_cuda = torch.cuda.is_available()
-device = torch.device("cuda" if use_cuda else "cpu")
-torch.manual_seed(args.seed)
-if use_cuda:
-    torch.cuda.manual_seed(args.seed)
 
 transition = np.dtype([('s', np.float64, (12, 64, 64)), ('a', np.float64, (3,)), ('a_logp', np.float64),
                        ('r', np.float64), ('s_', np.float64, (12, 64, 64))])
@@ -55,15 +56,10 @@ class Env():
 
         self.die = False
         img_rgb = self.env.reset()
-        save_image(torch.tensor(img_rgb.copy(), dtype=torch.float32).permute(2, 0, 1), "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/env_ppo_carracing.png", nrow=12)
         processed_obs = self.process_obs(img_rgb)
-        save_image(torch.tensor(processed_obs.copy(), dtype=torch.float32), "/home/mila/l/lea.cote-turcotte/LUSR/checkimages/preprocesss_ppo_carracing.png", nrow=12)
-        #img_gray = self.rgb2gray(processed_obs)
         self.stack = [processed_obs] * args.img_stack
         img = np.concatenate(self.stack, axis=0)
-        #print(np.array(self.stack).shape)
-        #print(np.array(self.stack).reshape(12, 64, 64).shape)   # four frames for decision
-        #return np.array(self.stack).reshape(12, 64, 64)
+        save_image(torch.tensor(img[:3, :, :].copy(), dtype=torch.float32), "/home/mila/l/lea.cote-turcotte/CDARL/figures/obs.png", nrow=12)
         return img
         
         #return processed_obs
@@ -84,25 +80,14 @@ class Env():
             if done or die:
                 break
         img_rgb = self.process_obs(img_rgb)
-        #img_gray = self.rgb2gray(img_rgb)
         self.stack.pop(0)
         self.stack.append(img_rgb)
         assert len(self.stack) == args.img_stack
-        img_rgb = np.array(self.stack).reshape(12, 64, 64)
-        #return np.array(self.stack), total_reward, done, die
+        img_rgb = np.concatenate(self.stack, axis=0)
         return img_rgb, total_reward, done, die
 
     def render(self, *arg):
         self.env.render(*arg)
-
-    @staticmethod
-    def rgb2gray(rgb, norm=True):
-        # rgb image -> gray [0, 1]
-        gray = np.dot(rgb[..., :], [0.299, 0.587, 0.114])
-        if norm:
-            # normalize
-            gray = gray / 128. - 1.
-        return gray
 
     @staticmethod
     def reward_memory():
@@ -119,23 +104,16 @@ class Env():
 
         return memory
 
-class Net(nn.Module):
-    """
-    Actor-Critic Network for PPO
-    """
-
-    def __init__(self, args):
-        super(Net, self).__init__()
+class EncoderBase(nn.Module):
+    def __init__(self):
+        super(EncoderBase, self).__init__()
         self.cnn_base = nn.Sequential(
             nn.Conv2d(12, 32, 4, stride=2), nn.ReLU(),
             nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
             nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
             nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
         )
-        self.critic = nn.Sequential(nn.Linear(2*2*256, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
-        self.actor = nn.Sequential(nn.Linear(2*2*256, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
-        self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
-        self.beta_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
+        self.out_dim = 2*2*256
         self.apply(self._weights_init)
 
     @staticmethod
@@ -147,12 +125,68 @@ class Net(nn.Module):
     def forward(self, x):
         x = self.cnn_base(x)
         x = x.view(x.size(0), -1)
+
+        return x
+
+class Net(nn.Module):
+    """
+    Actor-Critic Network for PPO
+    """
+
+    def __init__(self, args):
+        super(Net, self).__init__()
+        self.algo = args.algo
+        if self.algo in ['ppo', 'curl_ppo', 'drq_ppo', 'rad_ppo']:
+            self.cnn_base = EncoderBase()
+            self.out_dim = self.cnn_base.out_dim
+        elif self.algo == 'cycle_vae':
+            self.cnn_base = EncoderD(class_latent_size = 8, content_latent_size = 32, input_channel = 12, flatten_size = 1024)
+            self.out_dim = 32
+        elif self.algo == 'repr':
+            self.cnn_base = Encoder(latent_size = 32, input_channel = 12, flatten_size = 1024)
+            self.out_dim = 32
+
+        self.critic = nn.Sequential(nn.Linear(self.out_dim, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
+        self.actor = nn.Sequential(nn.Linear(self.out_dim, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU())
+        self.alpha_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
+        self.beta_head = nn.Sequential(nn.Linear(300, 3), nn.Softplus())
+
+    def forward(self, x):
+        if self.algo in ['ppo', 'curl_ppo', 'drq_ppo', 'rad_ppo']:
+            x = self.cnn_base(x)
+        elif self.algo == 'cycle_vae':
+            x, _, _ = self.cnn_base(x)
+            x = x.detach()
+        elif self.algo == 'repr':
+            x, _ = self.cnn_base(x)
+            x = x.detach()
+
+
         v = self.critic(x)
         x = self.actor(x)
         alpha = self.alpha_head(x) + 1
         beta = self.beta_head(x) + 1
 
         return (alpha, beta), v
+
+class CURLHead(nn.Module):
+	def __init__(self, encoder):
+		super().__init__()
+		self.encoder = encoder
+		self.W = nn.Parameter(torch.rand(encoder.out_dim, encoder.out_dim))
+
+	def compute_logits(self, z_a, z_pos):
+		"""
+		Uses logits trick for CURL:
+		- compute (B,B) matrix z_a (W z_pos.T)
+		- positives are all diagonal elements
+		- negatives are all other elements
+		- to compute loss use multiclass cross entropy with identity matrix for labels
+		"""
+		Wz = torch.matmul(self.W, z_pos.T)  # (z_dim,B)
+		logits = torch.matmul(z_a, Wz)  # (B,B)
+		logits = logits - torch.max(logits, 1)[0][:, None]
+		return logits
 
 class Agent():
     """
@@ -162,14 +196,19 @@ class Agent():
     clip_param = 0.1  # epsilon in clipped loss
     ppo_epoch = 10
     buffer_capacity, batch_size = 2000, 128
+    aux_update_freq = 2
 
     def __init__(self, args):
         self.training_step = 0
-        self.net = Net(args).to(device)
         self.buffer = np.empty(self.buffer_capacity, dtype=transition)
         self.counter = 0
 
+        self.net = Net(args).to(device)
         self.optimizer = optim.Adam(self.net.parameters(), lr=1e-3)
+
+        if args.algo == 'curl_ppo':
+            self.curl_head = CURLHead(self.net.cnn_base).cuda()
+            self.curl_optimizer = torch.optim.Adam(self.curl_head.parameters(), lr=1e-3, betas=(0.9, 0.999))
 
     def select_action(self, state):
         state = torch.from_numpy(state).to(device).unsqueeze(0)
@@ -183,8 +222,8 @@ class Agent():
         a_logp = a_logp.item()
         return action, a_logp
 
-    def save_param(self):
-        torch.save(self.net.state_dict(), '/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_ppo_stack.pt')
+    def save_param(self, log_dir):
+        torch.save(self.net.state_dict(), os.path.join(log_dir, "policy_ppo_stack.pt"))
 
     def store(self, transition):
         self.buffer[self.counter] = transition
@@ -195,7 +234,7 @@ class Agent():
         else:
             return False
 
-    def update(self):
+    def update(self, algo='ppo'):
         self.training_step += 1
 
         s = torch.tensor(self.buffer['s'], dtype=torch.float).to(device)
@@ -204,6 +243,17 @@ class Agent():
         s_ = torch.tensor(self.buffer['s_'], dtype=torch.float).to(device)
 
         old_a_logp = torch.tensor(self.buffer['a_logp'], dtype=torch.float).to(device).view(-1, 1)
+
+        if algo == 'drq_ppo':
+            s = random_shift(s)
+            s_ = random_shift(s_)
+        elif algo == 'rad_ppo':
+            s = random_crop(s)
+            s_ = random_crop(s_)
+        elif algo == 'curl_ppo':
+            pos = random_crop(s.clone())
+            s = random_crop(s)
+            s_ = random_crop(s_)
 
         with torch.no_grad():
             target_v = r + args.gamma * self.net(s_)[1]
@@ -229,11 +279,30 @@ class Agent():
                 #nn.utils.clip_grad_norm_(self.net.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
+                if self.training_step % 2 == 0:
+                    if algo == 'curl_ppo':
+                        assert s.size(-1) == 64 and pos.size(-1) == 64
+
+                        z_a = self.curl_head.encoder(s)
+                        with torch.no_grad():
+                            z_pos = self.critic_target.encoder(pos)
+                        
+                        logits = self.curl_head.compute_logits(z_a, z_pos)
+                        labels = torch.arange(logits.shape[0]).long().cuda()
+                        curl_loss = F.cross_entropy(logits, labels)
+                        
+                        self.curl_optimizer.zero_grad()
+                        curl_loss.backward()
+                        self.curl_optimizer.step()
+
 
 if __name__ == "__main__":
+    warnings.filterwarnings("ignore")
+    seed_everything(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    log_dir = create_logs(args, algo_name=True)
 
-    results_ppo = Resutls(title="Moving averaged episode reward", xlabel="episode", ylabel="ppo_running_score")
+    results_ppo = Results(title="Moving averaged episode reward", xlabel="episode", ylabel="ppo_running_score")
     results_ppo.create_logs(labels=["episode", "ppo_running_score", "ppo_episode_score", "training_time"], init_values=[[], [], [], []])
 
     agent = Agent(args)
@@ -250,7 +319,7 @@ if __name__ == "__main__":
         episode_lenght = 0
         state = env.reset()
 
-        for t in range(2000):
+        for t in range(1000):
             action, a_logp = agent.select_action(state)
             state_, reward, done, die = env.step(action * np.array([2., 1., 1.]) + np.array([-1., 0., 0.]))
             if args.render:
@@ -271,12 +340,14 @@ if __name__ == "__main__":
             results_ppo.update_logs(["episode", "ppo_running_score", "ppo_episode_score", "training_time"], [i_ep, ppo_running_score, ppo_episode_score, training_time])
             print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, ppo_running_score))
             print('Training time: {:.2f}\t'.format(training_time))
-            agent.save_param()
-            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(5))
+            agent.save_param(log_dir)
+            results_ppo.save_logs(log_dir)
         if ppo_running_score > env.reward_threshold:
-            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(5))
-            results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/5','/home/mila/l/lea.cote-turcotte/LUSR/figures')
+            results_ppo.save_logs(log_dir)
+            results_ppo.generate_plot(log_dir, log_dir)
             print("Solved! Running reward is now {} and the last episode runs to {}!".format(ppo_running_score, score))
             break
-    results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/LUSR/logs', str(5))
-    results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/LUSR/logs/5', '/home/mila/l/lea.cote-turcotte/LUSR/figures')
+
+    agent.save_param(log_dir)
+    results_ppo.save_logs(log_dir)
+    results_ppo.generate_plot(log_dir, log_dir)
