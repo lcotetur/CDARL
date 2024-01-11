@@ -19,21 +19,21 @@ from CDARL.CYCLEVAE.cycle_vae import EncoderD
 from CDARL.utils import seed_everything, Results, transform, create_logs, random_shift, random_crop
 
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
-parser.add_argument('--algo', default='cycle_vae', type=str)
+parser.add_argument('--algo', default='cycle_vae_ppo', type=str)
 parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/logs", type=str)
-parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/CYCLEVAE/runs/carracing/2023-12-19/encoder_cycle_vae_stack.pt', type=str)
+parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/CYCLEVAE/runs/carracing/2023-11-20/encoder_cycle_vae.pt', type=str)
 parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
 parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
-parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
+parser.add_argument('--img-stack', type=int, default=1, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--render', action='store_true', help='render the environment')
 parser.add_argument(
     '--log-interval', type=int, default=10, metavar='N', help='interval between training status logs (default: 10)')
 args = parser.parse_args()
 
-transition = np.dtype([('s', np.float64, (12, 64, 64)), ('a', np.float64, (3,)), ('a_logp', np.float64),
-                       ('r', np.float64), ('s_', np.float64, (12, 64, 64))])
+transition = np.dtype([('s', np.float64, (3, 64, 64)), ('a', np.float64, (3,)), ('a_logp', np.float64),
+                       ('r', np.float64), ('s_', np.float64, (3, 64, 64))])
 
 class Env():
     """
@@ -139,11 +139,23 @@ class Net(nn.Module):
         if self.algo in ['ppo', 'curl_ppo', 'drq_ppo', 'rad_ppo']:
             self.cnn_base = EncoderBase()
             self.out_dim = self.cnn_base.out_dim
-        elif self.algo == 'cycle_vae':
-            self.cnn_base = EncoderD(class_latent_size = 8, content_latent_size = 32, input_channel = 12, flatten_size = 1024)
+        elif self.algo == 'cycle_vae_ppo':
+            self.cnn_base = EncoderD(class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024)
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            for k in list(weights.keys()):
+                if k not in self.cnn_base.state_dict().keys():
+                    del weights[k]
+            self.cnn_base.load_state_dict(weights)
+            print("Loaded Weights")
             self.out_dim = 32
-        elif self.algo == 'repr':
+        elif self.algo == 'repr_ppo':
             self.cnn_base = Encoder(latent_size = 32, input_channel = 12, flatten_size = 1024)
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            for k in list(weights.keys()):
+                if k not in self.cnn_base.state_dict().keys():
+                    del weights[k]
+            self.cnn_base.load_state_dict(weights)
+            print("Loaded Weights")
             self.out_dim = 32
 
         self.critic = nn.Sequential(nn.Linear(self.out_dim, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1))
@@ -154,7 +166,7 @@ class Net(nn.Module):
     def forward(self, x):
         if self.algo in ['ppo', 'curl_ppo', 'drq_ppo', 'rad_ppo']:
             x = self.cnn_base(x)
-        elif self.algo == 'cycle_vae':
+        elif self.algo == 'cycle_vae_ppo':
             x, _, _ = self.cnn_base(x)
             x = x.detach()
         elif self.algo == 'repr':
@@ -223,7 +235,7 @@ class Agent():
         return action, a_logp
 
     def save_param(self, log_dir):
-        torch.save(self.net.state_dict(), os.path.join(log_dir, "policy_ppo_stack.pt"))
+        torch.save(self.net.state_dict(), os.path.join(log_dir, "policy.pt"))
 
     def store(self, transition):
         self.buffer[self.counter] = transition
@@ -342,6 +354,7 @@ if __name__ == "__main__":
             print('Training time: {:.2f}\t'.format(training_time))
             agent.save_param(log_dir)
             results_ppo.save_logs(log_dir)
+            results_ppo.generate_plot(log_dir, log_dir)
         if ppo_running_score > env.reward_threshold:
             results_ppo.save_logs(log_dir)
             results_ppo.generate_plot(log_dir, log_dir)

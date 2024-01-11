@@ -20,7 +20,7 @@ parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--learning-rate', default=1e-3, type=float)
 parser.add_argument('--learning-rate-vae', default=0.0001, type=float)
 parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
-parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
+parser.add_argument('--img-stack', type=int, default=3, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--render', action='store_true', help='render the environment')
 parser.add_argument('--beta', default=10, type=int)
@@ -40,8 +40,8 @@ torch.manual_seed(args.seed)
 if use_cuda:
     torch.cuda.manual_seed(args.seed)
 
-transition = np.dtype([('s', np.float64, (12, 64, 64)), ('a', np.float64, (3,)), ('a_logp', np.float64),
-                       ('r', np.float64), ('s_', np.float64, (12, 64, 64))])
+transition = np.dtype([('s', np.float64, (9, 64, 64)), ('a', np.float64, (3,)), ('a_logp', np.float64),
+                       ('r', np.float64), ('s_', np.float64, (9, 64, 64))])
 
 def updateloader(loader, dataset):
     dataset.loadnext()
@@ -96,9 +96,9 @@ class Env():
     Environment wrapper for CarRacing 
     """
 
-    def __init__(self):
+    def __init__(self, seed):
         self.env = gym.make('CarRacing-v0')
-        self.env.seed(args.seed)
+        self.env.seed(seed)
         self.reward_threshold = self.env.spec.reward_threshold
 
     def process_obs(self, obs):
@@ -113,15 +113,10 @@ class Env():
         self.die = False
         img_rgb = self.env.reset()
         processed_obs = self.process_obs(img_rgb)
-        #img_gray = self.rgb2gray(processed_obs)
         self.stack = [processed_obs] * args.img_stack
         img = np.concatenate(self.stack, axis=0)
-        #print(np.array(self.stack).shape)
-        #print(np.array(self.stack).reshape(12, 64, 64).shape)   # four frames for decision
-        #return np.array(self.stack).reshape(12, 64, 64)
+        save_image(torch.tensor(img[:3, :, :].copy(), dtype=torch.float32), "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/obs.png", nrow=12)
         return img
-        
-        #return processed_obs
 
     def step(self, action):
         total_reward = 0
@@ -139,12 +134,10 @@ class Env():
             if done or die:
                 break
         img_rgb = self.process_obs(img_rgb)
-        #img_gray = self.rgb2gray(img_rgb)
         self.stack.pop(0)
         self.stack.append(img_rgb)
         assert len(self.stack) == args.img_stack
-        img_rgb = np.array(self.stack).reshape(12, 64, 64)
-        #return np.array(self.stack), total_reward, done, die
+        img_rgb = np.concatenate(self.stack, axis=0)
         return img_rgb, total_reward, done, die
 
     def render(self, *arg):
@@ -175,7 +168,7 @@ class Env():
         return memory
 
 class Encoder(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 12, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 9, flatten_size = 1024):
         super(Encoder, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
@@ -349,13 +342,8 @@ class Agent():
                 for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity)), self.batch_size_vae, False):
                     self.vae_batches += 1
                     imgs = s[index]
-                    images = []
-                    i = 0
-                    while i < 12:
-                        image = RandomTransform(imgs[:, i:i+3, :, :]).apply_transformations(nb_class=10, value=None)
-                        images.append(image)
-                        i=i+3
-                    imgs = torch.cat(images, dim=2)
+
+                    imgs = RandomTransform(imgs).apply_transformations_stack(num_frames=args.img_stack, nb_class=5, value=0.3)
 
                     floss = 0
                     for i_class in range(imgs.shape[0]):
@@ -418,7 +406,10 @@ class Agent():
 
 
 if __name__ == "__main__":
+    warnings.filterwarnings("ignore")
+    seed_everything(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    log_dir = create_logs(args, algo_name=True)
 
     results_ppo = Results(title="Moving averaged episode reward", xlabel="episode", ylabel="endtoend_running_score")
     results_ppo.create_logs(labels=["episode", "endtoend_running_score", "endtoend_episode_score", "training_time"], init_values=[[], [], [], []])
@@ -462,16 +453,16 @@ if __name__ == "__main__":
             print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(i_ep, score, endtoend_running_score))
             print('Training time: {:.2f}\t'.format(training_time))
             agent.save_param()
-            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(9))
-            results_vae.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(10))
+            results_ppo.save_logs(log_dir)
+            results_ppo.save_logs(log_dir)
         if endtoend_running_score > env.reward_threshold:
-            results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(9))
-            results_vae.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(10))
-            results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/logs/9','/home/mila/l/lea.cote-turcotte/CDARL/figures')
-            results_vae.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/logs/10','/home/mila/l/lea.cote-turcotte/CDARL/figures')
+            results_ppo.save_logs(log_dir)
+            results_ppo.generate_plot(log_dir, log_dir)
+            results_vae.save_logs(log_dir)
+            results_vae.generate_plot(log_dir, log_dir)
             print("Solved! Running reward is now {} and the last episode runs to {}!".format(endtoend_running_score, score))
             break
-    results_ppo.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(9))
-    results_vae.save_logs('/home/mila/l/lea.cote-turcotte/CDARL/logs', str(10))
-    results_ppo.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/logs/9', '/home/mila/l/lea.cote-turcotte/CDARL/figures')
-    results_vae.generate_plot('/home/mila/l/lea.cote-turcotte/CDARL/logs/10','/home/mila/l/lea.cote-turcotte/CDARL/figures')
+    results_ppo.save_logs(log_dir)
+    results_ppo.generate_plot(log_dir, log_dir)
+    results_vae.save_logs(log_dir)
+    results_vae.generate_plot(log_dir, log_dir)

@@ -1,0 +1,14 @@
+name: mujoco
+domain_name: walker
+task_name: walk
+data_dir: '/home/mila/l/lea.cote-turcotte/dmcontrol_generalization_benchmark/logs/walker_walk/svea/0/model/100000.pt'
+save_path: /home/mila/l/lea.cote-turcotte/CDARL/ILCM/runs/mujoco
+
+training:
+  batchsize: 32
+  random_augmentations: True
+  epochs: 10000
+
+dim_x: [9, 84, 84]
+dim_z: 32
+noise: 0

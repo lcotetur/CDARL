@@ -17,24 +17,29 @@ import os
 from datetime import date
 import warnings
 from torchvision.utils import save_image
+from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
 from CDARL.utils import seed_everything, Results, ReplayBuffer, random_shift, random_crop, random_conv, transform, create_logs
 
 parser = argparse.ArgumentParser(description='Train a sac agent for the CarRacing-v0')
 parser.add_argument('--algo', default='sac', type=str)
 parser.add_argument('--repr', default='cycle_vae_sac', type=str)
-parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/CYCLEVAE/runs/carracing/2023-12-19/encoder_cycle_vae_stack.pt', type=str)
+parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carracing/2023-11-20/encoder_cycle_vae.pt', type=str)
 parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/logs", type=str)
 parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
-parser.add_argument('--latent-size', default=16, type=int)
+parser.add_argument('--latent-size', default=8, type=int)
 parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
-parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
+parser.add_argument('--img-stack', type=int, default=1, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--render', action='store_true', help='render the environment')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='interval between training status logs (default: 10)')
+parser.add_argument('--max-grad-norm', default=0.5, type=float)
+parser.add_argument('--clip-param', default=0.1, type=float)
+parser.add_argument('--sac-epoch', default=10, type=int)
+parser.add_argument('--aux-update-freq', default=2, type=int)
+parser.add_argument('--actor-update-freq', default=2, type=int)
+parser.add_argument('--critic-target-update-freq', default=2, type=int)
 args = parser.parse_args()
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-transition = np.dtype([('s', np.float64, (12, 64, 64)), ('a', np.float64, (3,)),
-                    ('r', np.float64), ('s_', np.float64, (12, 64, 64))])
 
 def cat(x, y, axis=0):
     return torch.cat([x, y], axis=0)
@@ -79,7 +84,7 @@ class Env():
         processed_obs = self.process_obs(img_rgb)
         self.stack = [processed_obs] * args.img_stack
         img = np.concatenate(self.stack, axis=0)
-        save_image(torch.tensor(img[:3, :, :].copy(), dtype=torch.float32), "/home/mila/l/lea.cote-turcotte/CDARL/figures/obs.png", nrow=12)
+        save_image(torch.tensor(img[:3, :, :].copy(), dtype=torch.float32), "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/obs.png", nrow=12)
         return img
 
     def step(self, action):
@@ -131,12 +136,76 @@ class Env():
 
         return memory
 
-class Encoder(nn.Module):
+def ilcm():
+    # Create model
+    scm = create_scm()
+    encoder, decoder = create_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=args.latent_size,
+            )
+    return model
 
-    def __init__(self):
+def create_scm():
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=args.latent_size,
+            min_std=0.2,
+        )
+
+    return scm
+
+def create_encoder_decoder():
+    encoder = ImageEncoder(
+            in_resolution=63,
+            in_features=3,
+            out_features=args.latent_size,
+            hidden_features=32,
+            batchnorm=False,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            min_std=1.e-3,
+            permutation=0,
+            )
+    decoder = ImageDecoder(
+            in_features=args.latent_size,
+            out_resolution=64,
+            out_features=3,
+            hidden_features=32,
+            batchnorm=False,
+            min_std=1.0,
+            fix_std=True,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            permutation=0,
+            )
+    return encoder, decoder
+
+def create_intervention_encoder():
+    intervention_encoder = HeuristicInterventionEncoder()
+    return intervention_encoder
+
+class Encoder(nn.Module):
+    def __init__(self, input_channel=3):
         super(Encoder, self).__init__()
         self.cnn_base = nn.Sequential(
-            nn.Conv2d(12, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
             nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
             nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
             nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
@@ -157,11 +226,11 @@ class Encoder(nn.Module):
         return x
 
 class SodaEncoder(nn.Module):
-    def __init__(self, projection_dim = 2*2*256, hidden_dim = 64, out_dim = 64):
+    def __init__(self, projection_dim = 2*2*256, input_channel=12, hidden_dim = 64, out_dim = 64):
         super(Encoder, self).__init__()
         self.out_dim = out_dim
         self.cnn_base = nn.Sequential(
-            nn.Conv2d(9, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
             nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
             nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
             nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
@@ -209,8 +278,9 @@ class VAE(nn.Module):
         mu = self.linear_mu(x)
         return mu
 
+
 class CycleVAE(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 12, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
         super(CycleVAE, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
@@ -236,6 +306,31 @@ class CycleVAE(nn.Module):
 
         return mu, logsigma, classcode
 
+
+class AdagVAE(nn.Module):
+    def __init__(self, latent_size = 32, input_channel = 3, flatten_size = 1024):
+        super(AdagVAE, self).__init__()
+        self.latent_size = latent_size
+
+        self.main = nn.Sequential(
+            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+          )
+
+        self.linear_mu = nn.Linear(flatten_size, latent_size)
+        self.linear_logsigma = nn.Linear(flatten_size, latent_size)
+
+    def forward(self, x):
+        x = self.main(x)
+        x = x.reshape(x.size(0), -1)
+        mu = self.linear_mu(x)
+        logsigma = self.linear_logsigma(x)
+
+        return mu, logsigma
+
+
 def gaussian_logprob(noise, log_std):
     """Compute Gaussian log probability"""
     residual = (-0.5 * noise.pow(2) - log_std).sum(-1, keepdim=True)
@@ -258,15 +353,25 @@ def weight_init(m):
         if hasattr(m.bias, 'data'):
             m.bias.data.fill_(0.0)
 
+
 class Actor(nn.Module):
-    def __init__(self, args, action_shape, hidden_dim, log_std_min, log_std_max):
+    def __init__(self, args, obs_chape, action_shape, hidden_dim, log_std_min, log_std_max):
         super().__init__()
         self.repr = args.repr
         if self.repr == None:
-            self.encoder = Encoder()
+            self.encoder = Encoder(input_channel=obs_shape[0])
             out_dim = self.encoder.out_dim
         elif self.repr == 'vae_sac':
-            self.encoder = VAE()
+            self.encoder = VAE(input_channel=obs_shape[0])
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            for k in list(weights.keys()):
+                if k not in self.encoder.state_dict().keys():
+                    del weights[k]
+            self.encoder.load_state_dict(weights)
+            print("Loaded Weights")
+            out_dim = 32
+        elif self.repr == 'invar_sac':
+            self.encoder = CycleVAE(input_channel=obs_shape[0])
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
             for k in list(weights.keys()):
                 if k not in self.encoder.state_dict().keys():
@@ -275,7 +380,16 @@ class Actor(nn.Module):
             print("Loaded Weights")
             out_dim = 32
         elif self.repr == 'cycle_vae_sac':
-            self.encoder = CycleVAE()
+            self.encoder = CycleVAE(input_channel=obs_shape[0])
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            for k in list(weights.keys()):
+                if k not in self.encoder.state_dict().keys():
+                    del weights[k]
+            self.encoder.load_state_dict(weights)
+            print("Loaded Weights")
+            out_dim = 40
+        elif self.repr == 'adagvae_sac':
+            self.encoder = AdagVAE(input_channel=obs_shape[0])
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
             for k in list(weights.keys()):
                 if k not in self.encoder.state_dict().keys():
@@ -283,6 +397,15 @@ class Actor(nn.Module):
             self.encoder.load_state_dict(weights)
             print("Loaded Weights")
             out_dim = 32
+        elif self.repr == 'ilcm_sac':
+            self.encoder = ilcm()
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            for k in list(weights.keys()):
+                if k not in self.encoder.state_dict().keys():
+                    del weights[k]
+            self.encoder.load_state_dict(weights)
+            print("Loaded Weights")
+            out_dim = 8
 
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
@@ -297,8 +420,17 @@ class Actor(nn.Module):
         if self.repr == 'vae_sac':
             x = self.encoder(x)
             x = x.detach()
-        elif self.repr == 'cycle_vae_sac':
+        elif self.repr == 'invar_sac':
             x, _, _ = self.encoder(x)
+            x = x.detach()
+        elif self.repr == 'cycle_vae_sac':
+            content, _, style = self.encoder(x)
+            x = torch.cat([content.detach(), style.detach()], dim=1)
+        elif self.repr == 'adagvae_sac':
+            x, _ = self.encoder(x)
+            x = x.detach()
+        elif self.repr == 'ilcm_sac':
+            x = self.encoder.encode_to_causal(x)
             x = x.detach()
         elif self.repr == None:
             x = self.encoder(x)
@@ -324,6 +456,7 @@ class Actor(nn.Module):
 
         return mu, pi, log_pi, log_std
 
+
 class QFunction(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_dim):
         super().__init__()
@@ -339,14 +472,23 @@ class QFunction(nn.Module):
         return self.trunk(torch.cat([obs, action], dim=1))
 
 class Critic(nn.Module):
-    def __init__(self, args, action_shape, hidden_dim):
+    def __init__(self, args, obs_shape, action_shape, hidden_dim):
         super().__init__()
         self.repr = args.repr
         if self.repr == None:
-            self.encoder = Encoder()
+            self.encoder = Encoder(obs_shape[0])
             out_dim = self.encoder.out_dim
         elif self.repr == 'vae_sac':
-            self.encoder = VAE()
+            self.encoder = VAE(input_channel=obs_shape[0])
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            for k in list(weights.keys()):
+                if k not in self.encoder.state_dict().keys():
+                    del weights[k]
+            self.encoder.load_state_dict(weights)
+            print("Loaded Weights")
+            out_dim = 32
+        elif self.repr == 'invar_sac':
+            self.encoder = CycleVAE(input_channel=obs_shape[0])
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
             for k in list(weights.keys()):
                 if k not in self.encoder.state_dict().keys():
@@ -355,7 +497,16 @@ class Critic(nn.Module):
             print("Loaded Weights")
             out_dim = 32
         elif self.repr == 'cycle_vae_sac':
-            self.encoder = CycleVAE()
+            self.encoder = CycleVAE(input_channel=obs_shape[0])
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            for k in list(weights.keys()):
+                if k not in self.encoder.state_dict().keys():
+                    del weights[k]
+            self.encoder.load_state_dict(weights)
+            print("Loaded Weights")
+            out_dim = 40
+        elif self.repr == 'adagvae_sac':
+            self.encoder = AdagVAE(input_channel=obs_shape[0])
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
             for k in list(weights.keys()):
                 if k not in self.encoder.state_dict().keys():
@@ -363,6 +514,15 @@ class Critic(nn.Module):
             self.encoder.load_state_dict(weights)
             print("Loaded Weights")
             out_dim = 32
+        elif self.repr == 'ilcm_sac':
+            self.encoder = ilcm()
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            for k in list(weights.keys()):
+                if k not in self.encoder.state_dict().keys():
+                    del weights[k]
+            self.encoder.load_state_dict(weights)
+            print("Loaded Weights")
+            out_dim = 8
 
         self.Q1 = QFunction(out_dim, action_shape[0], hidden_dim)
         self.Q2 = QFunction(out_dim, action_shape[0], hidden_dim)
@@ -371,8 +531,17 @@ class Critic(nn.Module):
         if self.repr == 'vae_sac':
             x = self.encoder(x)
             x = x.detach()
-        elif self.repr == 'cycle_vae_sac':
+        elif self.repr == 'invar_sac':
             x, _, _ = self.encoder(x)
+            x = x.detach()
+        elif self.repr == 'cycle_vae_sac':
+            content, _, style = self.encoder(x)
+            x = torch.cat([content.detach(), style.detach()], dim=1)
+        elif self.repr == 'adagvae_sac':
+            x, _ = self.encoder(x)
+            x = x.detach()
+        elif self.repr == 'ilcm_sac':
+            x = self.encoder.encode_to_causal(x)
             x = x.detach()
         elif self.repr == None:
             x = self.encoder(x)
@@ -438,23 +607,22 @@ def compute_soda_loss(self, x0, x1):
 
 
 class SAC(object):
-    max_grad_norm = 0.5
-    clip_param = 0.1  # epsilon in clipped loss
-    sac_epoch = 10
-    aux_update_freq = 2
-    actor_update_freq = 2
-    critic_target_update_freq = 2
 
-    def __init__(self, args, action_shape):
+    def __init__(self, args, obs_shape, action_shape):
+        self.max_grad_norm = args.max_grad_norm
+        self.clip_param = args.clip_param  # epsilon in clipped loss
+        self.sac_epoch = args.sac_epoch
+        self.aux_update_freq = args.aux_update_freq
+        self.actor_update_freq = args.actor_update_freq
+        self.critic_target_update_freq = args.critic_target_update_freq
         self.discount = 0.99
         self.critic_tau = 0.01
         self.encoder_tau = 0.05
-        self.critic_target_update_freq = 2
         self.counter = 0
         self.training_step = 0
 
-        self.actor = Actor(args, action_shape, 1024, -10, 2).cuda()
-        self.critic = Critic(args, action_shape, 1024).cuda()
+        self.actor = Actor(args, obs_shape, action_shape, 1024, -10, 2).cuda()
+        self.critic = Critic(args, obs_shape, action_shape, 1024).cuda()
         self.critic_target = deepcopy(self.critic)
         self.log_alpha = torch.tensor(np.log(0.1)).cuda()
         self.log_alpha.requires_grad = True
@@ -514,7 +682,7 @@ class SAC(object):
     def soft_update_critic_target(self):
         self.soft_update_params(self.critic.Q1, self.critic_target.Q1, self.critic_tau)
         self.soft_update_params(self.critic.Q2, self.critic_target.Q2, self.critic_tau)
-        self.soft_update_params(self.critic.encoder, self.critic_target.encoder,self.encoder_tau)
+        self.soft_update_params(self.critic.encoder, self.critic_target.encoder, self.encoder_tau)
         
     def soft_update_params(self, net, target_net, tau):
         for param, target_param in zip(net.parameters(), target_net.parameters()):
@@ -550,11 +718,11 @@ class SAC(object):
                 obs, action, reward, next_obs, not_done = replay_buffer.sample_svea()
             elif algo == 'pad_sac' or algo == 'soda_sac' or algo == 'rad_sac':
                 obs, action, reward, next_obs, not_done = replay_buffer.sample()
-            elif algo == 'curl':
+            elif algo == 'curl_sac':
                 obs, action, reward, next_obs, not_done, pos = replay_buffer.sample_curl()
                 
             # update critic SAC
-            if algo != 'svea_sac':
+            if algo in ['drq_sac', 'sac', 'curl_sac', 'pad_sac']:
                 with torch.no_grad():
                     _, policy_action, log_pi, _ = self.actor(next_obs)
                     target_Q1, target_Q2 = self.critic_target(next_obs, policy_action)
@@ -643,23 +811,25 @@ class SAC(object):
 
 # TO DO :IMPLEMENT SODA AND PAD
 if __name__ == "__main__":
+    print(args.algo)
     if args.algo in ['soda_sac', 'pad_sac']:
         print('not tested yet')
     warnings.filterwarnings("ignore")
     seed_everything(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    log_dir = create_logs(args, algo_name=True, repr=True)
+    log_dir = create_logs(args, algo_name=True, repr=args.repr)
 
-    results_sac = Results(title="Moving averaged episode reward", xlabel="trianing_step", ylabel="sac_running_score")
-    results_sac.create_logs(labels=["episode", "training_step", "sac_running_score", "score", "training_time", "eval_score"], init_values=[[], [], [], [], [], []])
+    results_sac = Results(title="Moving averaged episode reward", xlabel="episode", ylabel="sac_running_score")
+    results_sac.create_logs(labels=["episode", "episode_step", "training_step", "sac_running_score", "score", "training_time", "eval_score"], init_values=[[], [], [], [], [], [], []])
     env = Env(args.seed)
     test_env = Env(args.seed + 1)
     action_shape = (3,)
-    agent = SAC(args, action_shape)
+    obs_shape = (args.img_stack*3, 64, 64)
+    agent = SAC(args, obs_shape, action_shape)
     replay_buffer = ReplayBuffer(
-        obs_shape=(12, 64, 64),
-        action_shape=(3,),
-        capacity=200000,
+        obs_shape=obs_shape,
+        action_shape=action_shape,
+        capacity=100000,
         batch_size=128
     )
 
@@ -668,33 +838,37 @@ if __name__ == "__main__":
     state = env.reset()
     start_time = time.time()
     # 100000
-    episode, score, done, die = 0, 0, True, True
+    episode, episode_step, score, done, die = 0, 0, 0, True, True
     train_steps = 200000
     for step in range(train_steps+1):
         if done or die:
             if step > 1000:
-                num_updates = 5
+                num_updates = 1
+                print('update')
                 for _ in range(num_updates):
                     agent.update(replay_buffer, args.algo)
-
+            
             sac_running_score = sac_running_score * 0.99 + score * 0.01
+
+            if episode % args.log_interval == 0:
+                training_time = time.time() - start_time
+                #eval_score = evaluate(test_env, agent)
+                eval_score = 0
+                results_sac.update_logs(["episode", "episode_step", "training_step", "sac_running_score", "score", "training_time", "eval_score"], [episode, episode_step, step, sac_running_score, score, training_time, eval_score])
+                print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(episode, score, sac_running_score))
+                print('Training time: {:.2f}\t'.format(training_time))
+                print('Step: {:.2f}\t'.format(step))
+                print('Eval score: {:.2f}\t'.format(eval_score))
+                torch.save(agent, os.path.join(log_dir, "policy_sac_stack.pt"))
+                results_sac.save_logs(log_dir)
+                results_sac.generate_plot(log_dir, log_dir)
+
             obs = env.reset()
             done = False
             score = 0
             episode_lenght = 0
             episode_step = 0
             episode += 1
-
-        if episode % args.log_interval == 0 and episode_step == 0:
-            training_time = time.time() - start_time
-            eval_score = evaluate(test_env, agent)
-            results_sac.update_logs(["episode", "training_step", "sac_running_score", "score", "training_time", "eval_score"], [episode, step, sac_running_score, score, training_time, eval_score])
-            print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(episode, score, sac_running_score))
-            print('Training time: {:.2f}\t'.format(training_time))
-            print('Step: {:.2f}\t'.format(step))
-            print('Eval score: {:.2f}\t'.format(eval_score))
-            torch.save(agent, os.path.join(log_dir, "policy_sac_stack.pt"))
-            results_sac.save_logs(log_dir)
 
         # Take step
         action = agent.sample_action(obs)
@@ -705,7 +879,11 @@ if __name__ == "__main__":
         obs = next_obs
         episode_step += 1
 
+        if episode > 10000:
+            results_sac.save_logs(log_dir)
+            results_sac.generate_plot(log_dir, log_dir)
+            break
+
     print(step)
-    agent.save_param(log_dir)
     results_sac.save_logs(log_dir)
     results_sac.generate_plot(log_dir, log_dir)
