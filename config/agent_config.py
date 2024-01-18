@@ -6,11 +6,11 @@ def parse_args():
 	parser = argparse.ArgumentParser()
 
 	# algorithm
-	parser.add_argument('--repr', default='adagvae_sac', type=str)
+	parser.add_argument('--repr', default='invar_sac', type=str)
 	parser.add_argument('--algo', default='sac', type=str)
-	parser.add_argument('--img_stack', default=4, type=int)
+	parser.add_argument('--img_stack', default=3, type=int)
 	parser.add_argument('--action_repeat', default=8, type=int)
-	parser.add_argument('--encoder_path', default=None, type=str)
+	parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2023-11-21/model_step_188000.pt', type=str)
 	parser.add_argument('--training_step', default=500000, type=int)	
 	
 	# agent
@@ -55,6 +55,13 @@ def parse_args():
 	parser.add_argument('--soda_batch_size', default=256, type=int)
 	parser.add_argument('--soda_tau', default=0.005, type=float)
 
+	# cycle vae
+	parser.add_argument('--vae_batch_size', default=100, type=int)
+	parser.add_argument('--vae_lr', default=0.0003, type=float) #0.0001
+
+	# ilcm
+	parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-01-15/model_step_180000.pt', type=str)
+	
 	# svea
 	parser.add_argument('--svea_alpha', default=0.5, type=float)
 	parser.add_argument('--svea_beta', default=0.5, type=float)
@@ -80,15 +87,19 @@ def parse_args():
 		if args.repr=='vae_sac':
 			args.encoder_path = '/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carracing/2023-11-20/encoder_vae.pt'
 			args.latent_size = 32
+		elif args.repr=='ilcm_reduce_dim':
+			args.encoder_path = '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2023-11-21/model_step_188000.pt'
+			args.latent_size = 32
 		elif args.repr=='ilcm_sac':
-			args.encoder_path = '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/checkpoints/model_step_130000_carracing.pt'
-			args.latent_size = 8
+			args.encoder_path = '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2023-11-21/model_step_188000.pt'
+			args.latent_size = 6
 		elif args.repr=='cycle_vae_sac':
 			args.encoder_path = '/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carracing/2023-11-20/encoder_cycle_vae.pt'
-			args.latent_size = 32
-		elif args.repr=='invar_sac':
-			args.encoder_path = '/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carracing/2023-11-20/encoder_cycle_vae.pt'
 			args.latent_size = 40
+		elif args.repr=='invar_sac':
+			# Test if data dist in training encoder change performance of agent 
+			args.encoder_path = '/home/mila/l/lea.cote-turcotte/CDARL/logs/ppo_end_to_end/2024-01-14_1/encoder_endtoend_stack.pt'#'/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carracing/2023-11-20/encoder_cycle_vae.pt'
+			args.latent_size = 32
 		elif args.repr=='adagvae_sac':
 			args.encoder_path = '/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/checkpoints/encoder_adagvae_32.pt'
 			args.latent_size = 32

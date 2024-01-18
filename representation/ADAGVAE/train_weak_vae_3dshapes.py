@@ -12,12 +12,12 @@ import json
 import os
 
 from CDARL.data.shapes3d_data import Shape3dDataset
-from CDARL.utils import seed_everything
+from CDARL.utils import seed_everything, create_logs
 from weak_vae import ADAGVAE, compute_loss
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
-parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/runs/3dshapes", type=str)
+parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/runs/3dshapes", type=str)
 parser.add_argument('--batch-size', default=32, type=int)
 parser.add_argument('--num-epochs', default=10000, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
@@ -37,12 +37,13 @@ def main():
     seed_everything(args.seed)
 
     # create directories
-    log_dir = os.path.join(args.save_dir, str(date.today()))
-    os.makedirs(log_dir, exist_ok=True)
+    log_dir = create_logs(args)
+    #log_dir = os.path.join(args.save_dir, str(date.today()) + f'{args.seed}')
+    #os.makedirs(log_dir, exist_ok=True)
 
     #save args
-    with open(os.path.join(log_dir, "args.json"), 'w') as f:
-        json.dump(args.__dict__, f, indent=2)
+    #with open(os.path.join(log_dir, "args.json"), 'w') as f:
+        #json.dump(args.__dict__, f, indent=2)
 
     # create dataset
     print('loading data')

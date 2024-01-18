@@ -15,11 +15,12 @@ from datetime import date
 import cv2
 import kornia
 from torchvision.utils import save_image
+from torchvision.transforms import functional as TF
 
 def cat(x, y, axis=0):
     return torch.cat([x, y], axis=0)
 
-def updateloader(loader, dataset):
+def updateloader(args, loader, dataset):
     dataset.loadnext()
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     return loader
@@ -41,6 +42,13 @@ def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.random.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+def seed_torch(seed):
+    torch.manual_seed(seed)
+    torch.random.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
@@ -138,24 +146,28 @@ class RandomTransform():
                     transformed_img = self.jitter(imgs[i*m:(i+1)*m, :, :, :], value)
                     transforms.append(transformed_img.reshape(-1, 3*num_frames, 64, 64))
 
-    def domain_transformation(self, value=0.5, blur=False):
+    def domain_transformation(self, value=0.5, crop=False):
         if value == None:
             return self.imgs
-        elif blur == True:
-            return self.jitter(self.random_crop(self.imgs), value)
+        elif crop == True:
+            return self.domain_jitter(self.random_crop(self.imgs), value)
         else:
-            return self.jitter(self.imgs, value)
+            return self.domain_jitter(self.imgs, value)
 
-    def domain_transformation_stack(self, value=0.5, blur=False, num_frames=3):
+    def domain_transformation_stack(self, value=0.5, crop=False, num_frames=3, output_size=64):
         imgs = self.imgs.reshape(-1,3,64,64)
         if value == None:
             return self.imgs
-        elif blur == True:
-            t_img = self.jitter(self.random_crop(imgs), value)
+        elif crop == True:
+            t_img = self.domain_jitter(self.random_crop(imgs), value)
             return t_img.reshape(-1, 3*num_frames, 64, 64).squeeze(0)
         else:
-            t_img = self.jitter(imgs, value)
+            t_img = self.domain_jitter(imgs, value)
             return t_img.reshape(-1, 3*num_frames, 64, 64).squeeze(0)
+
+    def domain_jitter(self, imgs, value):
+        imgs = TF.adjust_hue(imgs, value)
+        return imgs
 
     def jitter(self, imgs, value):
         imgs = transforms.ColorJitter(hue=(value))(imgs)

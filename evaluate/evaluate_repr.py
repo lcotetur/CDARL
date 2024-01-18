@@ -23,12 +23,13 @@ parser.add_argument('--data-tag', default='car', type=str, help='files with data
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--batch-size', default=10, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
-parser.add_argument('--encoder-type', default='ilcm', type=str)
+parser.add_argument('--encoder-type', default='adagvae', type=str)
 parser.add_argument('--num-episodes', default=1, type=int)
 parser.add_argument('--eval_steps', default=100, type=int)
 parser.add_argument('--supervised', default=False, type=bool)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkpoints/model_step_130000_carracing.pt', type=str)
-parser.add_argument('--latent-size', default=8, type=int)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/logs/carracing/2023-11-22/model.pt', type=str)
+parser.add_argument('--latent-size', default=32, type=int)
+parser.add_argument('--seed', default=0, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
 parser.add_argument('--work-dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 args = parser.parse_args()
@@ -240,7 +241,7 @@ class MyModel(nn.Module):
 
         # evaluate representation ilcm
         elif self.encoder_type == 'ilcm':
-            latent_size = 8
+            latent_size = 32
             self.model = create_model()
 
             weights = torch.load(args.model_path, map_location=torch.device('cpu'))

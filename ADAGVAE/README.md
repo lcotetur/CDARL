@@ -1,1 +1,0 @@
-Reference implementation : https://github.com/google-research/disentanglement_lib

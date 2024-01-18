@@ -41,7 +41,7 @@ from model import ImageEncoder, ImageDecoder, CoordConv2d
 from training import VAEMetrics
 
 
-@hydra.main(version_base=None, config_path="config", config_name="ilcm")
+@hydra.main(version_base=None, config_path="config", config_name="ilcm_reduce_dim")
 def main(cfg):
     """High-level experiment function"""
     log_dir = os.path.join(cfg.data.save_path, str(date.today()))
@@ -56,7 +56,7 @@ def main(cfg):
     results.create_logs(labels=["training_step", "loss", "train_lr"], init_values=[[], [], []])
 
     # Train
-    model = create_model(cfg)
+    model = create_model_reduce_dim(cfg)
     train(cfg, model, results, log_dir)
     save_model(log_dir, model)
 
@@ -66,7 +66,7 @@ def main(cfg):
 
     logger.info("Anders nog iets?")
 
-def create_model(cfg):
+def create_model_reduce_dim(cfg):
     """Instantiates a (learnable) VAE model"""
 
     # Create model
@@ -154,7 +154,7 @@ def create_intervention_encoder(cfg):
 # noinspection PyTypeChecker
 def train(cfg, model, results, log_dir):
     """High-level training function"""
-    seed_everything(cfg.general.seed)
+    seed_torch(cfg.general.seed)
 
     logger.info("Starting training")
     logger.info(f"Training on {cfg.training.device}")
@@ -167,7 +167,7 @@ def train(cfg, model, results, log_dir):
     train_metrics = defaultdict(list)
     best_state = {"state_dict": None, "loss": None, "step": None}
 
-    data = get_dataloader(cfg, batchsize=cfg.training.batchsize, shuffle=True)
+    data = get_dataloader(cfg, batchsize=cfg.data.training.batchsize, shuffle=True)
     steps_per_epoch = 1
 
     # GPU
@@ -175,7 +175,7 @@ def train(cfg, model, results, log_dir):
 
     step = 0
     nan_counter = 0
-    epoch_generator = trange(cfg.training.epochs, disable=not cfg.general.verbose)
+    epoch_generator = trange(cfg.data.training.epochs, disable=not cfg.general.verbose)
     for epoch in epoch_generator:
         # Graph sampling settings
         graph_kwargs = determine_graph_learning_settings(cfg, epoch, model)
@@ -187,7 +187,7 @@ def train(cfg, model, results, log_dir):
 
         fractional_epoch = step / steps_per_epoch
 
-        imgs = data.create_weak_vae_batch(cfg.training.batchsize, cfg.training.device)
+        imgs = data.create_weak_vae_batch(cfg.data.training.batchsize, cfg.training.device)
         m = int(imgs.shape[2]/2) # 64
         x1 = imgs[:, :, :m, :] # torch.Size([10, 3, 64, 64])
         x2 = imgs[:, :, m:, :] # torch.Size([10, 3, 64, 64])
@@ -249,7 +249,7 @@ def train(cfg, model, results, log_dir):
 
         # Save model checkpoint
         if frequency_check(step, cfg.training.save_model_every_n_steps):
-            save_model(log_dir, model, f"model_step_{step}.pt")
+            save_model(log_dir, model, f"model_reduce_dim_{step}.pt")
             imgs1 = x1
             with torch.no_grad():
                 recon1 = model.encode_decode(imgs1)
@@ -263,14 +263,14 @@ def train(cfg, model, results, log_dir):
                 json.dump(metrics, f)
 
             # LR scheduler
-        if scheduler is not None and epoch < cfg.training.epochs - 1:
+        if scheduler is not None and epoch < cfg.data.training.epochs - 1:
             scheduler.step()
 
             # Optionally reset Adam stats
             if (
                 cfg.training.lr_schedule.type == "cosine_restarts_reset"
                 and (epoch + 1) % cfg.training.lr_schedule.restart_every_epochs == 0
-                and epoch + 1 < cfg.training.epochs
+                and epoch + 1 < cfg.data.training.epochs
             ):
                 logger.info(f"Resetting optimizer at epoch {epoch + 1}")
                 reset_optimizer_state(optim)

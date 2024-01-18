@@ -1,6 +1,6 @@
 name: carla
 data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/carla_data'
-save_path: /home/mila/l/lea.cote-turcotte/CDARL/ILCM/runs/carla
+save_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla
 data_tag: 'weather'
 num_splitted: 1
 

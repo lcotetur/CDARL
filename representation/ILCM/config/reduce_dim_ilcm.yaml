@@ -1,0 +1,7 @@
+defaults:
+  - general: ilcm
+  - data: 3dshapes
+  - model: reduce_dim_ilcm
+  - training: reduce_dim_ilcm
+  - hydra
+  - _self_  # Ensures that entries in this file overwrite everything references above, even in hydra <= 1.0

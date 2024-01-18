@@ -74,8 +74,8 @@ class CarlaEncoder(nn.Module):
             nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
         )
 
-        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
-        self.linear_logsigma = nn.Linear(flatten_size, content_latent_size)
+        self.linear_mu = nn.Linear(flatten_size, latent_size)
+        self.linear_logsigma = nn.Linear(flatten_size, latent_size)
 
     def forward(self, x):
         x = self.main(x)

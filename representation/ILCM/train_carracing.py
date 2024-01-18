@@ -14,6 +14,7 @@ from collections import defaultdict
 from omegaconf import OmegaConf
 from PIL import Image
 from io import BytesIO
+from datetime import date
 import yaml
 import json
 import os
@@ -40,10 +41,10 @@ from model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
 from model import ImageEncoder, ImageDecoder, CoordConv2d
 from training import VAEMetrics
 
-@hydra.main(version_base=None, config_path="config", config_name="ilcm")
+@hydra.main(version_base=None, config_path="config", config_name="ilcm_reduce_dim")
 def main(cfg):
     """High-level experiment function"""
-    log_dir = os.path.join(cfg.data.save_path, str(date.today()))
+    log_dir = os.path.join(cfg.data.save_path, str(date.today()) + f'_{cfg.general.seed}')
     os.makedirs(log_dir, exist_ok=True)
 
     # save config
@@ -166,7 +167,7 @@ def train(cfg, model, results, log_dir):
     train_metrics = defaultdict(list)
     best_state = {"state_dict": None, "loss": None, "step": None}
 
-    data = get_dataloader(cfg, batchsize=cfg.training.batchsize, shuffle=True)
+    data = get_dataloader(cfg, batchsize=cfg.data.training.batchsize, shuffle=True)
     steps_per_epoch = 1
 
     # GPU
@@ -174,7 +175,7 @@ def train(cfg, model, results, log_dir):
 
     step = 0
     nan_counter = 0
-    epoch_generator = trange(cfg.training.epochs, disable=not cfg.general.verbose)
+    epoch_generator = trange(cfg.data.training.epochs, disable=not cfg.general.verbose)
 
     for epoch in epoch_generator:
         for i_split in range(cfg.data.num_splitted):
@@ -192,17 +193,16 @@ def train(cfg, model, results, log_dir):
 
                 imgs = imgs.reshape(-1, *imgs.shape[2:])
                 imgs_repeat = imgs.repeat(2, 1, 1, 1)
-                if cfg.data.training.random_augmetations:
-                    imgs = RandomTransform(imgs_repeat).apply_transformations(nb_class=2, value=None)
+                if cfg.data.training.random_augmentations:
+                    imgs = RandomTransform(imgs_repeat).apply_transformations(nb_class=2, value=0.3, random_crop=False)
                     x1 = imgs[0]
                     x2 = imgs[1]
                 else:
-                    imgs = imgs_repeat
-                    n = imgs.shape[0]
-                    print(imgs.shape[0])
-                    x1 = imgs[:int(n/2), :, :, :]
+                    imgs = imgs_repeat # torch.Size([30, 3, 64, 64])
+                    m = int(imgs.shape[0]/2)
+                    x1 = imgs[:m, :, :, :]
                     print(x1.shape)
-                    x2 = imgs[int(n/2):, :, :, :]
+                    x2 = imgs[m:, :, :, :]
             
 
                 model.train()
@@ -276,14 +276,14 @@ def train(cfg, model, results, log_dir):
                         json.dump(metrics, f)
 
         # LR scheduler
-        if scheduler is not None and epoch < cfg.training.epochs - 1:
+        if scheduler is not None and epoch < cfg.data.training.epochs - 1:
             scheduler.step()
 
             # Optionally reset Adam stats
             if (
                 cfg.training.lr_schedule.type == "cosine_restarts_reset"
                 and (epoch + 1) % cfg.training.lr_schedule.restart_every_epochs == 0
-                and epoch + 1 < cfg.training.epochs
+                and epoch + 1 < cfg.data.training.epochs
             ):
                 logger.info(f"Resetting optimizer at epoch {epoch + 1}")
                 reset_optimizer_state(optim)

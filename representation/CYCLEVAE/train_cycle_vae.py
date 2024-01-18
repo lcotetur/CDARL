@@ -127,7 +127,7 @@ def main():
                         torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_cycle_vae.pt"))
 
             # load next splitted data
-            updateloader(loader, dataset)
+            updateloader(args, loader, dataset)
 
 if __name__ == '__main__':
     main()

@@ -90,8 +90,8 @@ class CarlaEncoder(nn.Module):
             nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
         )
 
-        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
-        self.linear_logsigma = nn.Linear(flatten_size, content_latent_size)
+        self.linear_mu = nn.Linear(flatten_size, latent_size)
+        self.linear_logsigma = nn.Linear(flatten_size, latent_size)
 
     def forward(self, x):
         x = self.main(x)
@@ -128,8 +128,8 @@ class CarlaDecoder(nn.Module):
 class CarlaVAE(nn.Module):
     def __init__(self, latent_size = 32, img_channel = 3, flatten_size=9216):
         super(CarlaVAE, self).__init__()
-        self.encoder = CarlaEncoder(class_latent_size, content_latent_size, img_channel, flatten_size)
-        self.decoder = CarlaDecoder(class_latent_size + content_latent_size, img_channel)
+        self.encoder = CarlaEncoder(latent_size, img_channel, flatten_size)
+        self.decoder = CarlaDecoder(latent_size, img_channel)
 
     def forward(self, x):
         mu, logsigma= self.encoder(x)

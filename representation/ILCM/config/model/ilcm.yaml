@@ -1,6 +1,6 @@
 type: intervention_noise_vae
-dim_x: [3, 64, 64]
-dim_z: 8
+dim_x: ${data.dim_z}
+dim_z: 6
 overwrite_latents: false
 
 averaging_strategy: stochastic
@@ -15,27 +15,20 @@ scm:
   min_std: 0.2
 
 encoder:
-  type: conv
-  hidden_channels: 32
-  batchnorm: false
-  coordinate_embeddings: true
-  extra_mlp_layers: 2
-  extra_mlp_hidden_units: 128
-  elementwise_layers: 0
-  elementwise_hidden_units: 16
-  min_std: 1.e-3
-  permutation: 0
+  type: mlp
+  flip: false
+  hidden_units: 64
+  hidden_layers: 5
+  std: 0.01
+  min_std: 0.0001
+  fix_std: false
 
 decoder:
-  hidden_channels: 32
-  min_std: 1.0
+  hidden_units: 64
+  hidden_layers: 5
+  std: 1.0
+  min_std: 0.001
   fix_std: true
-  batchnorm: false
-  coordinate_embeddings: true
-  extra_mlp_layers: 2
-  extra_mlp_hidden_units: 128
-  elementwise_layers: 0
-  elementwise_hidden_units: 16
 
 intervention_encoder:
   type: learnable_heuristic

@@ -17,32 +17,10 @@ import os
 from datetime import date
 import warnings
 from torchvision.utils import save_image
+from CDARL.config.agents_config import parse_args
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
-from CDARL.utils import seed_everything, Results, ReplayBuffer, random_shift, random_crop, random_conv, transform, create_logs
-
-parser = argparse.ArgumentParser(description='Train a sac agent for the CarRacing-v0')
-parser.add_argument('--algo', default='sac', type=str)
-parser.add_argument('--repr', default='cycle_vae_sac', type=str)
-parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carracing/2023-11-20/encoder_cycle_vae.pt', type=str)
-parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/logs", type=str)
-parser.add_argument('--gamma', type=float, default=0.99, metavar='G', help='discount factor (default: 0.99)')
-parser.add_argument('--latent-size', default=8, type=int)
-parser.add_argument('--action-repeat', type=int, default=8, metavar='N', help='repeat action in N frames (default: 8)')
-parser.add_argument('--img-stack', type=int, default=1, metavar='N', help='stack N image in a state (default: 4)')
-parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
-parser.add_argument('--render', action='store_true', help='render the environment')
-parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='interval between training status logs (default: 10)')
-parser.add_argument('--max-grad-norm', default=0.5, type=float)
-parser.add_argument('--clip-param', default=0.1, type=float)
-parser.add_argument('--sac-epoch', default=10, type=int)
-parser.add_argument('--aux-update-freq', default=2, type=int)
-parser.add_argument('--actor-update-freq', default=2, type=int)
-parser.add_argument('--critic-target-update-freq', default=2, type=int)
-args = parser.parse_args()
-
-def cat(x, y, axis=0):
-    return torch.cat([x, y], axis=0)
+from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder
+from CDARL.utils import seed_everything, Results, ReplayBuffer, random_shift, random_crop, random_conv, transform, create_logs, cat, RandomTransform
 
 def evaluate(env, agent, num_episodes=1):
     episode_rewards = []
@@ -136,10 +114,10 @@ class Env():
 
         return memory
 
-def ilcm():
+def create_model_reduce_dim():
     # Create model
-    scm = create_scm()
-    encoder, decoder = create_encoder_decoder()
+    scm = create_img_scm()
+    encoder, decoder = create_img_encoder_decoder()
     intervention_encoder = create_intervention_encoder()
     model = ILCM(
             scm,
@@ -148,28 +126,28 @@ def ilcm():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=args.latent_size,
+            dim_z=32,
             )
     return model
 
-def create_scm():
+def create_img_scm():
     scm = MLPImplicitSCM(
             graph_parameterization='none',
             manifold_thickness=0.01,
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=args.latent_size,
+            dim_z=32,
             min_std=0.2,
         )
 
     return scm
 
-def create_encoder_decoder():
+def create_img_encoder_decoder():
     encoder = ImageEncoder(
-            in_resolution=63,
+            in_resolution=64,
             in_features=3,
-            out_features=args.latent_size,
+            out_features=32,
             hidden_features=32,
             batchnorm=False,
             conv_class=CoordConv2d,
@@ -181,7 +159,7 @@ def create_encoder_decoder():
             permutation=0,
             )
     decoder = ImageDecoder(
-            in_features=args.latent_size,
+            in_features=32,
             out_resolution=64,
             out_features=3,
             hidden_features=32,
@@ -197,9 +175,68 @@ def create_encoder_decoder():
             )
     return encoder, decoder
 
+def create_ilcm():
+    """Instantiates a (learnable) VAE model"""
+
+    scm = create_scm()
+    encoder, decoder = create_mlp_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=6,
+            )
+
+    return model
+
 def create_intervention_encoder():
     intervention_encoder = HeuristicInterventionEncoder()
     return intervention_encoder
+
+def create_mlp_encoder_decoder():
+    """Create encoder and decoder"""
+
+    encoder_hidden_layers = 5
+    encoder_hidden = [64 for _ in range(encoder_hidden_layers)]
+    decoder_hidden_layers = 5
+    decoder_hidden = [64 for _ in range(decoder_hidden_layers)]
+
+    encoder = GaussianEncoder(
+                hidden=encoder_hidden,
+                input_features=32,
+                output_features=6,
+                fix_std=False,
+                init_std=0.01,
+                min_std=0.0001,
+            )
+    decoder = GaussianEncoder(
+                hidden=decoder_hidden,
+                input_features=6,
+                output_features=32,
+                fix_std=True,
+                init_std=1.0,
+                min_std=0.001,
+            )
+
+    return encoder, decoder
+
+def create_scm():
+    """Creates an SCM"""
+
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=6,
+            min_std=0.2,
+        )
+    return scm
 
 class Encoder(nn.Module):
     def __init__(self, input_channel=3):
@@ -359,53 +396,61 @@ class Actor(nn.Module):
         super().__init__()
         self.repr = args.repr
         if self.repr == None:
-            self.encoder = Encoder(input_channel=obs_shape[0])
+            self.encoder = Encoder(obs_shape[0])
             out_dim = self.encoder.out_dim
         elif self.repr == 'vae_sac':
-            self.encoder = VAE(input_channel=obs_shape[0])
+            self.encoder = VAE()
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 32
-        elif self.repr == 'invar_sac':
+            out_dim = args.latent_size
+            print("Loaded Weights VAE Encoder")
+        elif self.repr == 'cycle_vae_sac' or self.repr == 'invar_sac':
             self.encoder = CycleVAE(input_channel=obs_shape[0])
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 32
-        elif self.repr == 'cycle_vae_sac':
-            self.encoder = CycleVAE(input_channel=obs_shape[0])
-            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
-            self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 40
+            out_dim = args.latent_size
+            print("Loaded Weights CYCLEVAE Encoder")
         elif self.repr == 'adagvae_sac':
-            self.encoder = AdagVAE(input_channel=obs_shape[0])
+            self.encoder = AdagVAE()
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 32
+            out_dim = args.latent_size
+            print("Loaded Weights ADAGVAE Encoder")
+        elif self.repr == 'ilcm_reduce_dim':
+            self.encoder = create_model_reduce_dim()
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
+            self.encoder.load_state_dict(weights)
+            out_dim = args.latent_size
+            print("Loaded Weights ILCM Encoder")
         elif self.repr == 'ilcm_sac':
-            self.encoder = ilcm()
+            self.encoder = create_model_reduce_dim()
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 8
+            print("Loaded Weights ILCM Encoder")
+
+            self.causal_mlp = create_ilcm()
+            weights = torch.load(args.ilcm_path, map_location=torch.device('cuda'))
+            #for k in list(weights.keys()):
+                #if k not in self.causal_mlp.state_dict().keys():
+                    #del weights[k]
+            self.causal_mlp.load_state_dict(weights)
+            out_dim = 6
+            print("Loaded Weights Causal ILCM")
 
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
@@ -417,23 +462,24 @@ class Actor(nn.Module):
         self.mlp.apply(weight_init)
 
     def forward(self, x, compute_pi=True, compute_log_pi=True):
-        if self.repr == 'vae_sac':
+        if self.repr == None:
             x = self.encoder(x)
-            x = x.detach()
-        elif self.repr == 'invar_sac':
-            x, _, _ = self.encoder(x)
-            x = x.detach()
-        elif self.repr == 'cycle_vae_sac':
-            content, _, style = self.encoder(x)
-            x = torch.cat([content.detach(), style.detach()], dim=1)
-        elif self.repr == 'adagvae_sac':
-            x, _ = self.encoder(x)
-            x = x.detach()
-        elif self.repr == 'ilcm_sac':
-            x = self.encoder.encode_to_causal(x)
-            x = x.detach()
-        elif self.repr == None:
-            x = self.encoder(x)
+        elif self.repr is not None:
+            with torch.no_grad():
+                if self.repr == 'vae_sac':
+                    x = self.encoder(x)
+                elif self.repr == 'invar_sac':
+                    x, _, _ = self.encoder(x)
+                elif self.repr == 'cycle_vae_sac':
+                    content, _, style = self.encoder(x)
+                    x = torch.cat([content, style], dim=1)
+                elif self.repr == 'adagvae_sac':
+                    x, _ = self.encoder(x)
+                elif self.repr == 'ilcm_reduce_dim':
+                    x, _ = self.encoder.encoder.mean_std(x)
+                elif self.repr == 'ilcm_sac':
+                    z, _ = self.encoder.encoder.mean_std(x)
+                    x = self.causal_mlp.encode_to_causal(z)
 
         mu, log_std = self.mlp(x).chunk(2, dim=-1)
         log_std = torch.tanh(log_std)
@@ -479,72 +525,81 @@ class Critic(nn.Module):
             self.encoder = Encoder(obs_shape[0])
             out_dim = self.encoder.out_dim
         elif self.repr == 'vae_sac':
-            self.encoder = VAE(input_channel=obs_shape[0])
+            self.encoder = VAE()
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 32
-        elif self.repr == 'invar_sac':
+            out_dim = args.latent_size
+            print("Loaded Weights VAE Encoder")
+        elif self.repr == 'cycle_vae_sac' or self.repr == 'invar_sac':
             self.encoder = CycleVAE(input_channel=obs_shape[0])
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 32
-        elif self.repr == 'cycle_vae_sac':
-            self.encoder = CycleVAE(input_channel=obs_shape[0])
-            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
-            self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 40
+            out_dim = args.latent_size
+            print("Loaded Weights CYCLEVAE Encoder")
         elif self.repr == 'adagvae_sac':
-            self.encoder = AdagVAE(input_channel=obs_shape[0])
+            self.encoder = AdagVAE()
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 32
+            out_dim = args.latent_size
+            print("Loaded Weights ADAGVAE Encoder")
+        elif self.repr == 'ilcm_reduce_dim':
+            self.encoder = create_model_reduce_dim()
+            weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
+            self.encoder.load_state_dict(weights)
+            out_dim = args.latent_size
+            print("Loaded Weights ILCM Encoder")
         elif self.repr == 'ilcm_sac':
-            self.encoder = ilcm()
+            self.encoder = create_model_reduce_dim()
             weights = torch.load(args.encoder_path, map_location=torch.device('cuda'))
-            for k in list(weights.keys()):
-                if k not in self.encoder.state_dict().keys():
-                    del weights[k]
+            #for k in list(weights.keys()):
+                #if k not in self.encoder.state_dict().keys():
+                    #del weights[k]
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
-            out_dim = 8
+            print("Loaded Weights ILCM Encoder")
+
+            self.causal_mlp = create_ilcm()
+            weights = torch.load(args.ilcm_path, map_location=torch.device('cuda'))
+            #for k in list(weights.keys()):
+                #if k not in self.causal_mlp.state_dict().keys():
+                    #del weights[k]
+            self.causal_mlp.load_state_dict(weights)
+            out_dim = 6
+            print("Loaded Weights Causal ILCM")
 
         self.Q1 = QFunction(out_dim, action_shape[0], hidden_dim)
         self.Q2 = QFunction(out_dim, action_shape[0], hidden_dim)
 
     def forward(self, x, action):
-        if self.repr == 'vae_sac':
+        if self.repr == None:
             x = self.encoder(x)
-            x = x.detach()
-        elif self.repr == 'invar_sac':
-            x, _, _ = self.encoder(x)
-            x = x.detach()
-        elif self.repr == 'cycle_vae_sac':
-            content, _, style = self.encoder(x)
-            x = torch.cat([content.detach(), style.detach()], dim=1)
-        elif self.repr == 'adagvae_sac':
-            x, _ = self.encoder(x)
-            x = x.detach()
-        elif self.repr == 'ilcm_sac':
-            x = self.encoder.encode_to_causal(x)
-            x = x.detach()
-        elif self.repr == None:
-            x = self.encoder(x)
+        elif self.repr is not None:
+            with torch.no_grad():
+                if self.repr == 'vae_sac':
+                    x = self.encoder(x)
+                elif self.repr == 'invar_sac':
+                    x, _, _ = self.encoder(x)
+                elif self.repr == 'cycle_vae_sac':
+                    content, _, style = self.encoder(x)
+                    x = torch.cat([content, style], dim=1)
+                elif self.repr == 'adagvae_sac':
+                    x, _ = self.encoder(x)
+                elif self.repr == 'ilcm_reduce_dim':
+                    x, _ = self.encoder.encoder.mean_std(x)
+                elif self.repr == 'ilcm_sac':
+                    z, _ = self.encoder.encoder.mean_std(x)
+                    x = self.causal_mlp.encode_to_causal(z)
 
         return self.Q1(x, action), self.Q2(x, action)
 
@@ -605,7 +660,6 @@ def compute_soda_loss(self, x0, x1):
 
     return F.mse_loss(h0, h1)
 
-
 class SAC(object):
 
     def __init__(self, args, obs_shape, action_shape):
@@ -615,33 +669,37 @@ class SAC(object):
         self.aux_update_freq = args.aux_update_freq
         self.actor_update_freq = args.actor_update_freq
         self.critic_target_update_freq = args.critic_target_update_freq
-        self.discount = 0.99
-        self.critic_tau = 0.01
-        self.encoder_tau = 0.05
+        self.discount = args.discount
+        self.critic_tau = args.critic_tau
+        self.encoder_tau = args.encoder_tau
+        self.soda_tau = args.soda_tau
+        self.aux_lr = args.aux_lr
+        self.aux_beta = args.aux_beta
         self.counter = 0
         self.training_step = 0
 
-        self.actor = Actor(args, obs_shape, action_shape, 1024, -10, 2).cuda()
-        self.critic = Critic(args, obs_shape, action_shape, 1024).cuda()
+        encoder = make_encoder(args)
+        self.actor = Actor(args, encoder, obs_shape, action_shape, 1024, -10, 2).cuda()
+        self.critic = Critic(args, encoder, obs_shape, action_shape, 1024).cuda()
         self.critic_target = deepcopy(self.critic)
         self.log_alpha = torch.tensor(np.log(0.1)).cuda()
         self.log_alpha.requires_grad = True
 
         self.target_entropy = -np.prod(action_shape)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=1e-3, betas=(0.9, 0.999))
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=1e-3, betas=(0.9, 0.999))
-        self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=1e-4, betas=(0.9, 0.999))
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=args.actor_lr, betas=(args.actor_beta, 0.999))
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=args.critic_lr, betas=(args.critic_beta, 0.999))
+        self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=args.alpha_lr, betas=(args.alpha_beta, 0.999))
 
         if args.algo == 'curl_sac':
             self.curl_head = CURLHead(self.critic.encoder).cuda()
-            self.curl_optimizer = torch.optim.Adam(self.curl_head.parameters(), lr=1e-3, betas=(0.9, 0.999))
+            self.curl_optimizer = torch.optim.Adam(self.curl_head.parameters(), lr=self.aux_lr, betas=(self.aux_beta, 0.999))
 
         if args.algo == 'soda_sac':
             soda_encoder = SodaEncoder()
             self.predictor = m.SODAPredictor(soda_encoder, 64).cuda()
             self.predictor_target = deepcopy(self.predictor)
 
-            self.soda_optimizer = torch.optim.Adam(self.predictor.parameters(), lr=args.aux_lr, betas=(args.aux_beta, 0.999))
+            self.soda_optimizer = torch.optim.Adam(self.predictor.parameters(), lr=self.aux_lr, betas=(self.aux_beta, 0.999))
 
         if args.algo == 'pad_sac':
             aux_encoder = Encoder()
@@ -682,14 +740,14 @@ class SAC(object):
     def soft_update_critic_target(self):
         self.soft_update_params(self.critic.Q1, self.critic_target.Q1, self.critic_tau)
         self.soft_update_params(self.critic.Q2, self.critic_target.Q2, self.critic_tau)
-        self.soft_update_params(self.critic.encoder, self.critic_target.encoder, self.encoder_tau)
+        self.soft_update_params(self.critic.encoder, self.critic_target.encoder,self.encoder_tau)
         
     def soft_update_params(self, net, target_net, tau):
         for param, target_param in zip(net.parameters(), target_net.parameters()):
             target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 
     def update_soda(self, replay_buffer, L=None, step=None):
-        x = replay_buffer.sample_soda(256)
+        x = replay_buffer.sample_soda(args.soda_batch_size)
         assert x.size(-1) == 64
 
         aug_x = x.clone()
@@ -704,7 +762,7 @@ class SAC(object):
         soda_loss.backward()
         self.soda_optimizer.step()
 
-        self.soft_update_params(self.predictor, self.predictor_target, 0.005)
+        self.soft_update_params(self.predictor, self.predictor_target, self.soda_tau)
             
     def update(self, replay_buffer, algo='sac'):
         self.training_step += 1
@@ -737,8 +795,6 @@ class SAC(object):
                 self.critic_optimizer.step()
             # update critic SVEA
             elif algo == 'svea_sac':
-                svea_alpha = 0.5
-                svea_beta = 0.5
 
                 with torch.no_grad():
                     _, policy_action, log_pi, _ = self.actor(next_obs)
@@ -751,7 +807,7 @@ class SAC(object):
                 target_Q = cat(target_Q, target_Q)
 
                 current_Q1, current_Q2 = self.critic(obs, action)
-                critic_loss = (svea_alpha + svea_beta) * \
+                critic_loss = (args.svea_alpha + args.svea_beta) * \
                         (F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q))
                         
                 self.critic_optimizer.zero_grad()
@@ -793,6 +849,7 @@ class SAC(object):
                     self.pad_optimizer.zero_grad()
                     pad_loss.backward()
                     self.pad_optimizer.step()
+
                 elif algo == 'curl_sac':
                     assert obs.size(-1) == 64 and pos.size(-1) == 64
 
@@ -809,8 +866,9 @@ class SAC(object):
                     self.curl_optimizer.step()
 
 
-# TO DO :IMPLEMENT SODA AND PAD
+
 if __name__ == "__main__":
+    args = parse_args()
     print(args.algo)
     if args.algo in ['soda_sac', 'pad_sac']:
         print('not tested yet')
@@ -818,6 +876,7 @@ if __name__ == "__main__":
     seed_everything(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     log_dir = create_logs(args, algo_name=True, repr=args.repr)
+    print(log_dir)
 
     results_sac = Results(title="Moving averaged episode reward", xlabel="episode", ylabel="sac_running_score")
     results_sac.create_logs(labels=["episode", "episode_step", "training_step", "sac_running_score", "score", "training_time", "eval_score"], init_values=[[], [], [], [], [], [], []])
@@ -839,7 +898,7 @@ if __name__ == "__main__":
     start_time = time.time()
     # 100000
     episode, episode_step, score, done, die = 0, 0, 0, True, True
-    train_steps = 200000
+    train_steps = args.training_step
     for step in range(train_steps+1):
         if done or die:
             if step > 1000:
@@ -859,7 +918,7 @@ if __name__ == "__main__":
                 print('Training time: {:.2f}\t'.format(training_time))
                 print('Step: {:.2f}\t'.format(step))
                 print('Eval score: {:.2f}\t'.format(eval_score))
-                torch.save(agent, os.path.join(log_dir, "policy_sac_stack.pt"))
+                torch.save(agent, os.path.join(log_dir, "policy.pt"))
                 results_sac.save_logs(log_dir)
                 results_sac.generate_plot(log_dir, log_dir)
 

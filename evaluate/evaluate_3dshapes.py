@@ -29,7 +29,8 @@ parser.add_argument('--encoder-type', default='ilcm', type=str)
 parser.add_argument('--num-episodes', default=1, type=int)
 parser.add_argument('--eval-steps', default=2, type=int)
 parser.add_argument('--supervised', default=True, type=bool)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/ILCM/checkpoints/model_step_100000.pt', type=str)
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2023-11-21/model_step_188000.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-01-15/model_step_180000.pt', type=str)
 parser.add_argument('--latent-size', default=8, type=int)
 parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
@@ -41,10 +42,10 @@ def reconstruction_loss(x, recon_x):
     return recon_loss
 
 ######## ilcm model #########
-def create_model():
+def create_model_reduce_dim():
     # Create model
-    scm = create_scm()
-    encoder, decoder = create_encoder_decoder()
+    scm = create_img_scm()
+    encoder, decoder = create_img_encoder_decoder()
     intervention_encoder = create_intervention_encoder()
     model = ILCM(
             scm,
@@ -53,28 +54,28 @@ def create_model():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=args.latent_size,
+            dim_z=32,
             )
     return model
 
-def create_scm():
+def create_img_scm():
     scm = MLPImplicitSCM(
             graph_parameterization='none',
             manifold_thickness=0.01,
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=args.latent_size,
+            dim_z=32,
             min_std=0.2,
         )
 
     return scm
 
-def create_encoder_decoder():
+def create_img_encoder_decoder():
     encoder = ImageEncoder(
             in_resolution=64,
             in_features=3,
-            out_features=args.latent_size,
+            out_features=32,
             hidden_features=32,
             batchnorm=False,
             conv_class=CoordConv2d,
@@ -86,7 +87,7 @@ def create_encoder_decoder():
             permutation=0,
             )
     decoder = ImageDecoder(
-            in_features=args.latent_size,
+            in_features=32,
             out_resolution=64,
             out_features=3,
             hidden_features=32,
@@ -102,10 +103,71 @@ def create_encoder_decoder():
             )
     return encoder, decoder
 
+def create_ilcm():
+    """Instantiates a (learnable) VAE model"""
+
+    scm = create_scm()
+    encoder, decoder = create_mlp_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=6,
+            )
+
+    return model
+
 def create_intervention_encoder():
     intervention_encoder = HeuristicInterventionEncoder()
     return intervention_encoder
 
+def create_mlp_encoder_decoder():
+    """Create encoder and decoder"""
+
+    encoder_hidden_layers = 5
+    encoder_hidden = [64 for _ in range(encoder_hidden_layers)]
+    decoder_hidden_layers = 5
+    decoder_hidden = [64 for _ in range(decoder_hidden_layers)]
+
+    encoder = GaussianEncoder(
+                hidden=encoder_hidden,
+                input_features=32,
+                output_features=6,
+                fix_std=False,
+                init_std=0.01,
+                min_std=0.0001,
+            )
+    decoder = GaussianEncoder(
+                hidden=decoder_hidden,
+                input_features=6,
+                output_features=32,
+                fix_std=True,
+                init_std=1.0,
+                min_std=0.001,
+            )
+
+    return encoder, decoder
+
+def create_scm():
+    """Creates an SCM"""
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=6,
+            min_std=0.2,
+        )
+    return scm
+
+def create_intervention_encoder():
+    intervention_encoder = HeuristicInterventionEncoder()
+    return intervention_encoder
 
 ######## models ##########
 
@@ -279,9 +341,23 @@ class MyModel(nn.Module):
             self.decoder = Decoder(latent_size)
 
         # evaluate representation ilcm
+        elif self.encoder_type == 'ilcm_reduce_dim':
+            latent_size = 32
+            self.model = create_model_reduce_dim()
+
+            weights = torch.load(args.model_path, map_location=torch.device('cpu'))
+            self.model.load_state_dict(weights)
+            print("Loaded Weights")
+
+        # evaluate representation ilcm
         elif self.encoder_type == 'ilcm':
-            latent_size = 8
-            self.model = create_model()
+            latent_size = 6
+            self.encoder = create_model_reduce_dim()
+            self.model = create_ilcm()
+
+            weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
+            self.encoder.load_state_dict(weights)
+            print("Loaded Weights")
 
             weights = torch.load(args.model_path, map_location=torch.device('cpu'))
             self.model.load_state_dict(weights)
@@ -301,8 +377,9 @@ class MyModel(nn.Module):
                 features = torch.cat([mu_s, mu], dim=1)
                 recon = self.decoder(features)
             elif self.encoder_type == 'ilcm':
-                features = self.model.encode_to_causal(x)
-                recon = self.model.encode_decode(x)
+                e, _ = self.encoder.encoder.mean_std(x)
+                features = self.model.encode_to_causal(e)
+                recon = self.encoder.encode_decode(x)
         return features, recon
 
 def evaluate():

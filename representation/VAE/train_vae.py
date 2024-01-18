@@ -13,8 +13,8 @@ from datetime import date
 import argparse
 import os
 
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform, seed_everything
-from vae import VAE
+from CDARL.utils import ExpDataset, reparameterize, RandomTransform, seed_everything, updateloader, transform
+from vae import VAE, compute_loss, vae_loss
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
@@ -39,33 +39,6 @@ parser.add_argument('--carla-model', default=False, action='store_true', help='C
 args = parser.parse_args()
 
 Model = VAE
-
-def transform(obs, nb_class=5):
-	frames=[]
-	for n in range(4):
-		frame = RandomTransform(obs[:, 3*n:3*(n+1), :, :]/255).apply_transformations(nb_class, value=0.3)
-		frames.append(frame)
-		transformed_obs = torch.cat(frames, dim=2)
-	transformed_obs = transformed_obs.reshape(-1, *transformed_obs.shape[2:])
-	return transformed_obs
-
-
-def updateloader(loader, dataset):
-    dataset.loadnext()
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    return loader
-
-def vae_loss(x, mu, logsigma, recon_x, beta=1):
-    recon_loss = F.mse_loss(x, recon_x, reduction='mean')
-    kl_loss = -0.5 * torch.sum(1 + logsigma - mu.pow(2) - logsigma.exp())
-    kl_loss = kl_loss / torch.numel(x)
-    return recon_loss + kl_loss * beta
-
-def compute_loss(x, model, beta):
-    mu, logsigma = model.encoder(x)
-    latentcode = reparameterize(mu, logsigma)
-    recon = model.decoder(latentcode)
-    return vae_loss(x, mu, logsigma, recon, beta)
 
 def main():
     seed_everything(args.seed)
@@ -105,11 +78,11 @@ def main():
                 if args.stack_frames:
                     imgs = imgs.repeat(1, args.img_stack, 1, 1)
                     if args.random_augmentations:
-                        imgs = transform(imgs)
-                    save_image(imgs[:, :3, :, :], os.path.join(log_dir,'see_transform_stack.png'))
+                        imgs = RandomTransform(imgs).apply_transformations_stack(num_frames=args.img_stack, nb_class=5, value=0.3)
                 else:
                     if args.random_augmentations:
-                        imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
+                        imgs = RandomTransform(imgs).apply_transformations_stack(num_frames=1, nb_class=5, value=0.3)
+                        #imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
                         imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
                     save_image(imgs, os.path.join(log_dir,'see_transform.png'))
 

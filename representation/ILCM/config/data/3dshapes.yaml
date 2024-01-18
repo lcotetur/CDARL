@@ -1,11 +1,12 @@
 name: 3dshapes
-data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5'
-save_path: /home/mila/l/lea.cote-turcotte/CDARL/ILCM/runs/3dshapes
+data_dir: /home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5
+save_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/3dshapes
+encoder_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/checkpoints/model_step_100000.pt
 
 training:
-  batchsize: 32	
+  batchsize: 32
   epochs: 10000
 
 dim_x: [3, 64, 64]
-dim_z: 12
+dim_z: 8
 noise: 0

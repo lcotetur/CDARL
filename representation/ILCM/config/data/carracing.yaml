@@ -1,8 +1,10 @@
 name: carracing
 data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data'
-save_path: /home/mila/l/lea.cote-turcotte/CDARL/ILCM/runs/carracing
+save_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing
+encoder_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2023-11-21/model_step_188000.pt
 data_tag: 'car'
 num_splitted: 10
+num_workers: 4
 
 training:
   batchsize: 6

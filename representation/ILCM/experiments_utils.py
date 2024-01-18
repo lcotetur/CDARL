@@ -266,7 +266,7 @@ def create_optimizer_and_scheduler(cfg, model, separate_param_groups=False):
         scheduler = None
     elif cfg.training.lr_schedule.type == "cosine":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optim, cfg.training.epochs, eta_min=cfg.training.lr_schedule.minimal
+            optim, cfg.data.training.epochs, eta_min=cfg.training.lr_schedule.minimal
         )
     elif cfg.training.lr_schedule.type in ["cosine_restarts", "cosine_restarts_reset"]:
         try:
@@ -348,7 +348,7 @@ def generic_scheduler(cfg, schedule_cfg, epoch, default_value=None):
             return schedule_cfg.final
     elif schedule_cfg.type == "exponential":
         return exponential_scheduler(
-            epoch, cfg.training.epochs, schedule_cfg.initial, schedule_cfg.final
+            epoch, cfg.data.training.epochs, schedule_cfg.initial, schedule_cfg.final
         )
     elif schedule_cfg.type == "exponential_constant":
         return exponential_scheduler(

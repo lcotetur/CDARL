@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carla_data', type=str, help='path to the data')
 parser.add_argument('--data-tag', default='weather', type=str, help='files with data_tag in name under data directory will be considered as collected states')
 parser.add_argument('--num-splitted', default=1, type=int, help='number of files that the states from one domain are splitted into')
-parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/ADAGVAE/logs/carla", type=str)
+parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carla", type=str)
 parser.add_argument('--batch-size', default=10, type=int)
 parser.add_argument('--num-epochs', default=50, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
@@ -71,7 +71,7 @@ def main():
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
                 imgs = imgs.reshape(-1, *imgs.shape[2:])
                 if args.random_augmentations:
-                    imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3, output_size=128)
                     imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
                 save_image(imgs, os.path.join(log_dir,'see_transform.png'))
 
@@ -96,7 +96,7 @@ def main():
                     torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_vae.pt"))
 
             # load next splitted data
-            updateloader(loader, dataset)
+            updateloader(args, loader, dataset)
 
 if __name__ == '__main__':
     main()

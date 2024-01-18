@@ -19,7 +19,7 @@ from CDARL.data.shapes3d_data import Shape3dDataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
-parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/VAE/runs/3dshapes", type=str)
+parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/3dshapes", type=str)
 parser.add_argument('--batch-size', default=50, type=int)
 parser.add_argument('--num-epochs', default=10000, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
@@ -75,7 +75,7 @@ def main():
         batch_count += args.batch_size
 
         imgs = dataset.process_obs(imgs, device)
-        save_image(imgs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/vae_3dshapes.png", nrow=10)
+        save_image(imgs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/vae_3dshapes.png", nrow=10)
 
         optimizer.zero_grad()
 

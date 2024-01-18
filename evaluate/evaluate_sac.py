@@ -17,7 +17,7 @@ from torch.distributions.kl import kl_divergence
 from torchvision.utils import save_image
 
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
+from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder
 
 import gym
 import cv2
@@ -29,12 +29,12 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--algo', default='sac', type=str)
-parser.add_argument('--repr', default='invar_sac', type=str)
+parser.add_argument('--repr', default='ilcm_sac', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/logs/invar_sac/2023-12-28_0/policy_sac_stack.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/logs/ilcm_sac/2024-01-16_1/policy.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
@@ -54,7 +54,7 @@ args = parser.parse_args()
 paths_seeds = {'/home/mila/l/lea.cote-turcotte/CDARL/logs/adagvae_sac/2024-01-08_0/policy_sac_stack.pt_done': 0,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/adagvae_sac/2024-01-08_1/policy_sac_stack.pt': 1,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/adagvae_sac/2024-01-08_2/policy_sac_stack.pt': 2,
-                '/home/mila/l/lea.cote-turcotte/CDARL/logs/cycle_vae_sac/2024-01-10_0/policy_sac_stack.pt_done': 0,
+                '/home/mila/l/lea.cote-turcotte/CDARL/logs/cycle_vae_sac/2024-01-10_0/policy_sac_stack.pt': 0,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/cycle_vae_sac/2024-01-10_1/policy_sac_stack.pt': 1,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/cycle_vae_sac/2024-01-10_2/policy_sac_stack.pt': 2,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/drq_sac/2024-01-06_0/policy_sac_stack.pt': 0,
@@ -63,9 +63,9 @@ paths_seeds = {'/home/mila/l/lea.cote-turcotte/CDARL/logs/adagvae_sac/2024-01-08
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/ilcm_sac/2023-12-29_1/policy_sac_stack.pt': 1,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/ilcm_sac/2023-12-29_2/policy_sac_stack.pt': 2,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/ilcm_sac/2024-01-07_0/policy_sac_stack.pt': 0,
-                '/home/mila/l/lea.cote-turcotte/CDARL/logs/invar_sac/2023-12-27_2/policy_sac_stack.pt_done': 2,
-                '/home/mila/l/lea.cote-turcotte/CDARL/logs/invar_sac/2023-12-28_0/policy_sac_stack.pt_done': 0,
-                '/home/mila/l/lea.cote-turcotte/CDARL/logs/invar_sac/2023-12-28_1/policy_sac_stack.pt_done': 1,
+                '/home/mila/l/lea.cote-turcotte/CDARL/logs/invar_sac/2023-12-27_2/policy_sac_stack.pt': 2,
+                '/home/mila/l/lea.cote-turcotte/CDARL/logs/invar_sac/2023-12-28_0/policy_sac_stack.pt': 0,
+                '/home/mila/l/lea.cote-turcotte/CDARL/logs/invar_sac/2023-12-28_1/policy_sac_stack.pt': 1,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/svea_sac/2024-01-09_0/policy_sac_stack.pt': 0,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/svea_sac/2024-01-10_1/policy_sac_stack.pt': 1,
                 '/home/mila/l/lea.cote-turcotte/CDARL/logs/svea_sac/2024-01-10_2/policy_sac_stack.pt': 2,
@@ -79,10 +79,10 @@ def process_obs(obs):
     obs = np.transpose(obs, (2,0,1))
     return obs
 
-def ilcm():
+def create_model_reduce_dim():
     # Create model
-    scm = create_scm()
-    encoder, decoder = create_encoder_decoder()
+    scm = create_img_scm()
+    encoder, decoder = create_img_encoder_decoder()
     intervention_encoder = create_intervention_encoder()
     model = ILCM(
             scm,
@@ -91,28 +91,28 @@ def ilcm():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=args.latent_size,
+            dim_z=32,
             )
     return model
 
-def create_scm():
+def create_img_scm():
     scm = MLPImplicitSCM(
             graph_parameterization='none',
             manifold_thickness=0.01,
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=args.latent_size,
+            dim_z=32,
             min_std=0.2,
         )
 
     return scm
 
-def create_encoder_decoder():
+def create_img_encoder_decoder():
     encoder = ImageEncoder(
-            in_resolution=63,
+            in_resolution=64,
             in_features=3,
-            out_features=args.latent_size,
+            out_features=32,
             hidden_features=32,
             batchnorm=False,
             conv_class=CoordConv2d,
@@ -124,7 +124,7 @@ def create_encoder_decoder():
             permutation=0,
             )
     decoder = ImageDecoder(
-            in_features=args.latent_size,
+            in_features=32,
             out_resolution=64,
             out_features=3,
             hidden_features=32,
@@ -140,9 +140,68 @@ def create_encoder_decoder():
             )
     return encoder, decoder
 
+def create_ilcm():
+    """Instantiates a (learnable) VAE model"""
+
+    scm = create_scm()
+    encoder, decoder = create_mlp_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=6,
+            )
+
+    return model
+
 def create_intervention_encoder():
     intervention_encoder = HeuristicInterventionEncoder()
     return intervention_encoder
+
+def create_mlp_encoder_decoder():
+    """Create encoder and decoder"""
+
+    encoder_hidden_layers = 5
+    encoder_hidden = [64 for _ in range(encoder_hidden_layers)]
+    decoder_hidden_layers = 5
+    decoder_hidden = [64 for _ in range(decoder_hidden_layers)]
+
+    encoder = GaussianEncoder(
+                hidden=encoder_hidden,
+                input_features=32,
+                output_features=6,
+                fix_std=False,
+                init_std=0.01,
+                min_std=0.0001,
+            )
+    decoder = GaussianEncoder(
+                hidden=decoder_hidden,
+                input_features=6,
+                output_features=32,
+                fix_std=True,
+                init_std=1.0,
+                min_std=0.001,
+            )
+
+    return encoder, decoder
+
+def create_scm():
+    """Creates an SCM"""
+
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=6,
+            min_std=0.2,
+        )
+    return scm
 
 class Encoder(nn.Module):
     def __init__(self, input_channel=3):
@@ -317,8 +376,9 @@ class Actor(nn.Module):
             self.encoder = AdagVAE(input_channel=obs_shape[0])
             out_dim = 32
         elif self.repr == 'ilcm_sac':
-            self.encoder = ilcm()
-            out_dim = 8
+            self.encoder = create_model_reduce_dim()
+            self.causal_mlp = create_ilcm()
+            out_dim = 6
 
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
@@ -330,44 +390,42 @@ class Actor(nn.Module):
         self.mlp.apply(weight_init)
 
     def forward(self, x, compute_pi=True, compute_log_pi=True):
-        if self.repr == 'vae_sac':
-            x = self.encoder(x)
-            x = x.detach()
-        #temporary fix
-        #elif self.repr == 'invar_sac':
-        elif self.repr == 'cycle_vae_sac': #remove this line after testing invar and remove other comments
-            x, _, _ = self.encoder(x)
-            x = x.detach()
-        #elif self.repr == 'cycle_vae_sac':
-            #content, _, style = self.encoder(x)
-            #x = torch.cat([content.detach(), style.detach()], dim=1)
-        elif self.repr == 'adagvae_sac':
-            x, _ = self.encoder(x)
-            x = x.detach()
-        elif self.repr == 'ilcm_sac':
-            x = self.encoder.encode_to_causal(x)
-            x = x.detach()
-        elif self.repr == None:
-            x = self.encoder(x)
+        with torch.no_grad():
+            if self.repr == 'vae_sac':
+                x = self.encoder(x)
+            #temporary fix
+            #elif self.repr == 'invar_sac':
+            elif self.repr == 'cycle_vae_sac':
+                x, _, _ = self.encoder(x)
+            #elif self.repr == 'cycle_vae_sac':
+                #content, _, style = self.encoder(x)
+                #x = torch.cat([content, style], dim=1)
+            elif self.repr == 'adagvae_sac':
+                x, _ = self.encoder(x)
+            elif self.repr == 'ilcm_sac':
+                z, _ = self.encoder.encoder.mean_std(x)
+                x = self.causal_mlp.encode_to_causal(z)
+            elif self.repr == None:
+                x = self.encoder(x)
 
-        mu, log_std = self.mlp(x).chunk(2, dim=-1)
-        log_std = torch.tanh(log_std)
-        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
+            mu, log_std = self.mlp(x).chunk(2, dim=-1)
+            log_std = torch.tanh(log_std)
+            log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
 
-        if compute_pi:
-            std = log_std.exp()
-            noise = torch.randn_like(mu)
-            pi = mu + noise * std
-        else:
-            pi = None
-            entropy = None
+            if compute_pi:
+                std = log_std.exp()
+                noise = torch.randn_like(mu)
+                pi = mu + noise * std
+            else:
+                pi = None
+                entropy = None
 
-        if compute_log_pi:
-            log_pi = gaussian_logprob(noise, log_std)
-        else:
-            log_pi = None
+            if compute_log_pi:
+                log_pi = gaussian_logprob(noise, log_std)
+            else:
+                log_pi = None
 
-        mu, pi, log_pi = squash(mu, pi, log_pi)
+            mu, pi, log_pi = squash(mu, pi, log_pi)
 
         return mu, pi, log_pi, log_std
 
@@ -406,33 +464,31 @@ class Critic(nn.Module):
             self.encoder = AdagVAE(input_channel=obs_shape[0])
             out_dim = 32
         elif self.repr == 'ilcm_sac':
-            self.encoder = ilcm()
-            out_dim = 8
+            self.encoder = create_model_reduce_dim()
+            self.causal_mlp = create_ilcm()
+            out_dim = 6
 
         self.Q1 = QFunction(out_dim, action_shape[0], hidden_dim)
         self.Q2 = QFunction(out_dim, action_shape[0], hidden_dim)
 
     def forward(self, x, action):
-        if self.repr == 'vae_sac':
-            x = self.encoder(x)
-            x = x.detach()
-
-        #temporary fix
-        #elif self.repr == 'invar_sac':
-        elif self.repr == 'cycle_vae_sac':
-            x, _, _ = self.encoder(x)
-            x = x.detach()
-        #elif self.repr == 'cycle_vae_sac':
-            #content, _, style = self.encoder(x)
-            #x = torch.cat([content.detach(), style.detach()], dim=1)
-        elif self.repr == 'adagvae_sac':
-            x, _ = self.encoder(x)
-            x = x.detach()
-        elif self.repr == 'ilcm_sac':
-            x = self.encoder.encode_to_causal(x)
-            x = x.detach()
-        elif self.repr == None:
-            x = self.encoder(x)
+        with torch.no_grad():
+            if self.repr == 'vae_sac':
+                x = self.encoder(x)
+            #temporary fix
+            #elif self.repr == 'invar_sac':
+            elif self.repr == 'cycle_vae_sac':
+                x, _, _ = self.encoder(x)
+            #elif self.repr == 'cycle_vae_sac':
+                #content, _, style = self.encoder(x)
+                #x = torch.cat([content, style], dim=1)
+            elif self.repr == 'adagvae_sac':
+                x, _ = self.encoder(x)
+            elif self.repr == 'ilcm_sac':
+                z, _ = self.encoder.encoder.mean_std(x)
+                x = self.causal_mlp.encode_to_causal(z)
+            elif self.repr == None:
+                x = self.encoder(x)
 
         return self.Q1(x, action), self.Q2(x, action)
 
@@ -713,35 +769,45 @@ def main():
 
     domains_results = []
     domains_means = []
-    blur = False
+    crop = False
 
     for domain in range(args.nb_domain):
         if domain == 0:
             color = None
         elif domain == args.nb_domain - 1:
-            blur = True
+            crop = True
+        elif domain == args.nb_domain - 2:
+            color = -0.2
         else:
-            color = np.random.randint(4, 5)/10
-        print(color, blur)
+            color = np.random.randint(3, 6)/10
+        print(color, crop)
         results = []
         for i in range(args.num_episodes):
             episode_reward, done, obs = 0, False, env.reset()
             obs = process_obs(obs)
-            stack = [np.array(obs)] * args.img_stack
+            new_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, crop)
+            stack = [np.array(new_obs)] * args.img_stack
             new_obs = np.concatenate(stack, axis=0)
-            new_obs = RandomTransform(torch.tensor(new_obs)).domain_transformation_stack(color, blur, args.img_stack)
             video.init(enabled=((i == 0) or (i == 99)))
             while not done:
-                action = agent.select_action(new_obs)
+                obs = torch.from_numpy(new_obs).float()
+                action = agent.select_action(obs)
                 for _ in range(args.action_repeat):
                     obs, reward, done, info = env.step(action * np.array([2., 1., 1.]) + np.array([-1., 0., 0.]))
                     obs = process_obs(obs)
+                    
+                    t_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, crop)
+                    save_image(t_obs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/eval_domain_%d.png" % (domain))
                     stack.pop(0)
-                    stack.append(np.array(obs))
-                    assert len(stack) == args.img_stack
-                    t_stack = np.concatenate(stack, axis=0)
-                    new_obs = RandomTransform(torch.tensor(t_stack)).domain_transformation_stack(color, blur, args.img_stack)
+                    stack.append(np.array(t_obs))
 
+                    #stack.pop(0)
+                    #stack.append(np.array(obs))
+                    #assert len(stack) == args.img_stack
+                    #stack = np.concatenate(stack, axis=0)
+                    #t_stack = RandomTransform(torch.tensor(stack)).domain_transformation_stack(color, crop, args.img_stack)
+
+                    new_obs = np.concatenate(stack, axis=0)
                     episode_reward += reward
                     if done:
                         break
@@ -757,12 +823,14 @@ def main():
         domains_means.append(np.mean(results))
     if args.repr is None:
         with open(os.path.join(args.save_path, 'results_%s_%d.txt' % (args.algo, paths_seeds[args.model_path])), 'w') as f:
-            f.write('score = %s' % domains_results)
-            f.write('mean_scores = %s' % domains_means)
+            f.write('score = %s\n' % domains_results)
+            f.write('mean_scores = %s\n' % domains_means)
+            f.write('model = %s\n' % args.model_path)
     else:
         with open(os.path.join(args.save_path, 'results_%s_%d.txt' % (args.repr, paths_seeds[args.model_path])), 'w') as f:
-            f.write('score = %s' % domains_results)
-            f.write('mean_scores = %s' % domains_means)
+            f.write('score = %s\n' % domains_results)
+            f.write('mean_scores = %s\n' % domains_means)
+            f.write('model = %s\n' % args.model_path)
 
 if __name__ == '__main__':
     main()

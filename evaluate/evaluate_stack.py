@@ -15,6 +15,9 @@ from torch.distributions import Normal, Beta
 from torch.distributions.kl import kl_divergence
 from torchvision.utils import save_image
 
+from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder
+
 import gym
 import cv2
 import os
@@ -23,17 +26,17 @@ import argparse
 import time
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--policy-type', default='ppo_drq', type=str)
+parser.add_argument('--policy-type', default='ilcm', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/logs/drq_ppo/2023-12-19_0/policy_ppo_stack.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/logs/ilcm_ppo/2024-01-17_0/policy.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
 parser.add_argument('--action-repeat', default=4, type=int)
-parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
+parser.add_argument('--img-stack', type=int, default=1, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--save_video', default=True, action='store_true')
 parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 parser.add_argument('--nb_domain', default=4, type=int)
@@ -46,6 +49,130 @@ def process_obs(obs):
     return obs
 
 ######## models ##########
+def create_model_reduce_dim():
+    # Create model
+    scm = create_img_scm()
+    encoder, decoder = create_img_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=32,
+            )
+    return model
+
+def create_img_scm():
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=32,
+            min_std=0.2,
+        )
+
+    return scm
+
+def create_img_encoder_decoder():
+    encoder = ImageEncoder(
+            in_resolution=64,
+            in_features=3,
+            out_features=32,
+            hidden_features=32,
+            batchnorm=False,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            min_std=1.e-3,
+            permutation=0,
+            )
+    decoder = ImageDecoder(
+            in_features=32,
+            out_resolution=64,
+            out_features=3,
+            hidden_features=32,
+            batchnorm=False,
+            min_std=1.0,
+            fix_std=True,
+            conv_class=CoordConv2d,
+            mlp_layers=2,
+            mlp_hidden=128,
+            elementwise_hidden=16,
+            elementwise_layers=0,
+            permutation=0,
+            )
+    return encoder, decoder
+
+def create_ilcm():
+    """Instantiates a (learnable) VAE model"""
+
+    scm = create_scm()
+    encoder, decoder = create_mlp_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=6,
+            )
+
+    return model
+
+def create_intervention_encoder():
+    intervention_encoder = HeuristicInterventionEncoder()
+    return intervention_encoder
+
+def create_mlp_encoder_decoder():
+    """Create encoder and decoder"""
+
+    encoder_hidden_layers = 5
+    encoder_hidden = [64 for _ in range(encoder_hidden_layers)]
+    decoder_hidden_layers = 5
+    decoder_hidden = [64 for _ in range(decoder_hidden_layers)]
+
+    encoder = GaussianEncoder(
+                hidden=encoder_hidden,
+                input_features=32,
+                output_features=6,
+                fix_std=False,
+                init_std=0.01,
+                min_std=0.0001,
+            )
+    decoder = GaussianEncoder(
+                hidden=decoder_hidden,
+                input_features=6,
+                output_features=32,
+                fix_std=True,
+                init_std=1.0,
+                min_std=0.001,
+            )
+
+    return encoder, decoder
+
+def create_scm():
+    """Creates an SCM"""
+
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=6,
+            min_std=0.2,
+        )
+    return scm
+
 # Encoder download weights invar
 class EncoderI(nn.Module):
     def __init__(self, latent_size = 32, input_channel = 3):
@@ -175,13 +302,8 @@ class MyModel(nn.Module):
 
         # evaluate policy with end-to-end training
         if self.policy_type == 'end_to_end':
-            latent_size = 16
-            self.main = EncoderE(class_latent_size = 8, content_latent_size = 16, input_channel = 3, flatten_size = 1024)
-        
-        # evaluate policy invariant representation
-        elif self.policy_type == 'invar':
             latent_size = 32
-            self.main = EncoderI(latent_size=latent_size)
+            self.main = EncoderE(class_latent_size = 8, content_latent_size = 32, input_channel = 9, flatten_size = 1024)
 
         # evaluate policy entangle representation
         elif self.policy_type == 'repr':
@@ -189,11 +311,16 @@ class MyModel(nn.Module):
             self.main = Encoder(latent_size=latent_size)
 
         # evaluate policy disentangled representation
-        elif self.policy_type == 'disent':
+        elif self.policy_type == 'disent' or self.policy_type == 'invar':
             class_latent_size = 8
             content_latent_size = 32
             latent_size = class_latent_size + content_latent_size
             self.main = EncoderD(class_latent_size, content_latent_size)
+
+        elif self.policy_type == 'ilcm':
+            latent_size = 6
+            self.encoder = create_model_reduce_dim()
+            self.causal_mlp = create_ilcm()
     
         # evaluate policy no encoder
         elif self.policy_type == 'ppo' or self.policy_type == 'augm':
@@ -223,6 +350,13 @@ class MyModel(nn.Module):
             elif self.policy_type == 'disent':
                 content, _, style = self.main(x)
                 features = torch.cat([content, style], dim=1)
+            elif self.policy_type == 'invar':
+                features, _, _ = self.main(x)
+            elif self.policy_type == 'end_to_end':
+                features = self.main(x)
+            elif self.policy_type == 'ilcm':
+                z, _ = self.encoder.encoder.mean_std(x)
+                features = self.causal_mlp.encode_to_causal(z)
             elif self.policy_type == 'repr':
                 features, _, = self.main(x)
             elif self.policy_type == 'ppo_curl' or self.policy_type == 'ppo_drq':
@@ -265,21 +399,23 @@ def main():
 
     domains_results = []
     domains_means = []
-    blur = False
+    crop = False
 
     for domain in range(args.nb_domain):
         if domain == 0:
             color = None
         elif domain == args.nb_domain - 1:
-            blur = True
+            crop = True
+        elif domain == args.nb_domain - 2:
+            color = -0.2
         else:
-            color = np.random.randint(4, 5)/10
-        print(color, blur)
+            color = 0.3
+        print(color, crop)
         results = []
         for i in range(args.num_episodes):
             episode_reward, done, obs = 0, False, env.reset()
             obs = process_obs(obs)
-            new_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, blur)
+            new_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, crop)
             stack = [np.array(new_obs)] * args.img_stack
             new_obs = np.concatenate(stack, axis=0)
             video.init(enabled=((i == 0) or (i == 99)))
@@ -289,9 +425,8 @@ def main():
                 for _ in range(args.action_repeat):
                     obs, reward, done, info = env.step(action)
                     obs = process_obs(obs)
-                    t_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, blur)
-                    print(obs.shape)
-                    save_image(t_obs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/obs_%d.png" % (domain))
+                    t_obs = RandomTransform(torch.tensor(obs)).domain_transformation(color, crop)
+                    save_image(t_obs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/domain_%d.png" % (domain))
                     stack.pop(0)
                     stack.append(np.array(t_obs))
                     assert len(stack) == args.img_stack
@@ -310,8 +445,8 @@ def main():
         domains_results.append(results)
         domains_means.append(np.mean(results))
     with open(os.path.join(args.save_path, 'results_%s.txt' % args.policy_type), 'w') as f:
-        f.write('score = %s' % domains_results)
-        f.write('mean_scores = %s' % domains_means)
-
+        f.write('score = %s\n' % domains_results)
+        f.write('mean_scores = %s\n' % domains_means)
+        f.write('model = %s\n' % args.model_path)
 if __name__ == '__main__':
     main()

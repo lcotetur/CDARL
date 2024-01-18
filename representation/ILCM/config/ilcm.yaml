@@ -1,6 +1,6 @@
 defaults:
   - general: ilcm
-  - data: ???
+  - data: carracing
   - model: ilcm
   - training: ilcm
   - hydra

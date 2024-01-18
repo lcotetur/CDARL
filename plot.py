@@ -100,8 +100,7 @@ if __name__ == "__main__":
     #generate_plot('ilcm moving averaged ep reward', "training_iteration", "episode_reward_mean", '/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-11-06_16-11-20qt8vy6z0', '/home/mila/l/lea.cote-turcotte/CDARL/figures')
     save_path = '/home/mila/l/lea.cote-turcotte/CDARL/results'
     test_title_ray = ['ILCM', 'AdagVAE', 'LUSR', 'cycle_vae', 'vae']
-    test_logdir_ray = {'ILCM': ['/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-11-06_16-11-20qt8vy6z0_ilcm',
-                            '/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-11-15_10-31-54rapemstu_ilcm_42'],
+    test_logdir_ray = {'ILCM': ['/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2024-01-16_12-55-21jn3t_26q_ilcm_0'],
                   'AdagVAE': ['/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-09-22_08-53-39hqvly_cp_adagvae',
                               '/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-11-15_21-37-22vh1lexc6_adagvae_42'],
                   'LUSR': ['/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-09-12_09-47-18fhqmzpyx_invar',
@@ -110,7 +109,7 @@ if __name__ == "__main__":
                                 '/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-11-17_11-40-30xwixjnxi_disent_42'],
                   'vae': ['/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-09-16_21-34-15x2xrozpo_repr',
                           '/home/mila/l/lea.cote-turcotte/ray_results/PPO_myenv_2023-11-19_11-25-2538x74yge_repr_42']}
-    #generate_plot_multi_seed_ray(test_title_ray, test_logdir_ray, save_path)
+    generate_plot_multi_seed_ray(test_title_ray, test_logdir_ray, save_path)
 
     test_title = ['ilcm_sac', 'adagvae_sac', 'invar_sac', 'cycle_vae_sac', 'vae_sac', 'svea_sac', 'drq_sac']
     test_logdir = {'ilcm_sac': ['/home/mila/l/lea.cote-turcotte/CDARL/logs/ilcm_sac/2023-12-29_1',

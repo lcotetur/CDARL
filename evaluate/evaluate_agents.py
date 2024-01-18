@@ -7,6 +7,7 @@ from ray.rllib.models import ModelCatalog, ActionDistribution
 from ray.rllib.utils.annotations import override
 from video import VideoRecorder
 from CDARL.utils import RandomTransform, seed_everything
+import warnings
 
 import torch
 import torch.nn as nn
@@ -14,8 +15,8 @@ from torch.distributions import Normal, Beta
 from torch.distributions.kl import kl_divergence
 from torchvision.utils import save_image
 
-from CDARL.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from CDARL.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
+from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder
 
 import gym
 import cv2
@@ -29,7 +30,7 @@ parser.add_argument('--policy-type', default='ilcm', type=str)
 parser.add_argument('--deterministic-sample', default=False, action='store_true')
 parser.add_argument('--env', default="CarRacing-v0", type=str)
 parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_ilcm.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/checkpoints/policy_ilcm_0.pt', type=str)
 parser.add_argument('--render', default=False, action='store_true')
 parser.add_argument('--latent-size', default=8, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
@@ -49,10 +50,10 @@ def process_obs(obs): # input single frame (96, 96, 3) for CarRacing
     return torch.from_numpy(obs).unsqueeze(0)
 
 ######## ilcm model #########
-def create_model():
+def create_model_reduce_dim():
     # Create model
-    scm = create_scm()
-    encoder, decoder = create_encoder_decoder()
+    scm = create_img_scm()
+    encoder, decoder = create_img_encoder_decoder()
     intervention_encoder = create_intervention_encoder()
     model = ILCM(
             scm,
@@ -61,28 +62,28 @@ def create_model():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=args.latent_size,
+            dim_z=32,
             )
     return model
 
-def create_scm():
+def create_img_scm():
     scm = MLPImplicitSCM(
             graph_parameterization='none',
             manifold_thickness=0.01,
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=args.latent_size,
+            dim_z=32,
             min_std=0.2,
         )
 
     return scm
 
-def create_encoder_decoder():
+def create_img_encoder_decoder():
     encoder = ImageEncoder(
             in_resolution=64,
             in_features=3,
-            out_features=args.latent_size,
+            out_features=32,
             hidden_features=32,
             batchnorm=False,
             conv_class=CoordConv2d,
@@ -94,7 +95,7 @@ def create_encoder_decoder():
             permutation=0,
             )
     decoder = ImageDecoder(
-            in_features=args.latent_size,
+            in_features=32,
             out_resolution=64,
             out_features=3,
             hidden_features=32,
@@ -110,9 +111,68 @@ def create_encoder_decoder():
             )
     return encoder, decoder
 
+def create_ilcm():
+    """Instantiates a (learnable) VAE model"""
+
+    scm = create_scm()
+    encoder, decoder = create_mlp_encoder_decoder()
+    intervention_encoder = create_intervention_encoder()
+    model = ILCM(
+            scm,
+            encoder=encoder,
+            decoder=decoder,
+            intervention_encoder=intervention_encoder,
+            intervention_prior=None,
+            averaging_strategy='stochastic',
+            dim_z=6,
+            )
+
+    return model
+
 def create_intervention_encoder():
     intervention_encoder = HeuristicInterventionEncoder()
     return intervention_encoder
+
+def create_mlp_encoder_decoder():
+    """Create encoder and decoder"""
+
+    encoder_hidden_layers = 5
+    encoder_hidden = [64 for _ in range(encoder_hidden_layers)]
+    decoder_hidden_layers = 5
+    decoder_hidden = [64 for _ in range(decoder_hidden_layers)]
+
+    encoder = GaussianEncoder(
+                hidden=encoder_hidden,
+                input_features=32,
+                output_features=6,
+                fix_std=False,
+                init_std=0.01,
+                min_std=0.0001,
+            )
+    decoder = GaussianEncoder(
+                hidden=decoder_hidden,
+                input_features=6,
+                output_features=32,
+                fix_std=True,
+                init_std=1.0,
+                min_std=0.001,
+            )
+
+    return encoder, decoder
+
+def create_scm():
+    """Creates an SCM"""
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=6,
+            min_std=0.2,
+        )
+    return scm
+
 
 ######## models ##########
 # Encoder download weights invar
@@ -247,8 +307,9 @@ class MyModel(nn.Module):
 
         # evaluate representation ilcm
         elif self.policy_type == 'ilcm':
-            latent_size = 8
-            self.main = create_model()
+            latent_size = 6
+            self.encoder = create_model_reduce_dim()
+            self.main = create_ilcm()
     
         # evaluate policy no encoder
         elif self.policy_type == 'ppo' or self.policy_type == 'augm':
@@ -277,7 +338,8 @@ class MyModel(nn.Module):
             elif self.policy_type == 'repr' or self.policy_type == 'adagvae':
                 features, _, = self.main(x)
             elif self.policy_type == 'ilcm':
-                features = self.main.encode_to_causal(x)
+                z, _ = self.encoder.encoder.mean_std(x)
+                features = self.main.encode_to_causal(z)
             else:
                 features = self.main(x)
             actor_features = self.actor(features)
@@ -302,6 +364,7 @@ class MyModel(nn.Module):
 ########### Do Evaluation #################
 def main():
     seed_everything(args.seed)
+    warnings.filterwarnings("ignore")
 
     video_dir = os.path.join(args.work_dir, 'video')
     video = VideoRecorder(video_dir if args.save_video else None)
@@ -314,21 +377,23 @@ def main():
 
     domains_results = []
     domains_means = []
-    blur = False
+    crop = False
 
     for domain in range(args.nb_domain):
         if domain == 0:
             color = None
         elif domain == args.nb_domain - 1:
-            blur = True
+            crop = True
+        elif domain == args.nb_domain - 2:
+            color = -0.2
         else:
-            color = np.random.randint(4, 5)/10
-        print(color, blur)
+            color = np.random.randint(3, 6)/10
+        print(color, crop)
         results = []
         for i in range(args.num_episodes):
             episode_reward, done, obs = 0, False, env.reset()
             obs = process_obs(obs)
-            new_obs = RandomTransform(obs).domain_transformation(color, blur)
+            new_obs = RandomTransform(obs).domain_transformation(color, crop)
             video.init(enabled=((i == 0) or (i == 99)))
             while not done:
                 action = model(new_obs)
@@ -341,8 +406,8 @@ def main():
                 if args.render:
                     env.render()
                 obs = process_obs(obs)
-                new_obs = RandomTransform(obs).domain_transformation(color, blur)
-                save_image(new_obs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/obs_%d.png" % (domain))
+                new_obs = RandomTransform(obs).domain_transformation(color, crop)
+                save_image(new_obs, "/home/mila/l/lea.cote-turcotte/CDARL/checkimages/obs_%d.png" % (domain))
             video.save('%d_%s.mp4' % (domain, args.policy_type))
             results.append(episode_reward)
 
@@ -351,8 +416,9 @@ def main():
         domains_results.append(results)
         domains_means.append(np.mean(results))
     with open(os.path.join(args.save_path, 'results_%s.txt' % args.policy_type), 'w') as f:
-        f.write('score = %s' % domains_results)
-        f.write('mean_scores = %s' % domains_means)
+        f.write('score = %s\n' % domains_results)
+        f.write('mean_scores = %s\n' % domains_means)
+        f.write('model = %s\n' % args.model_path)
 
 if __name__ == '__main__':
     main()

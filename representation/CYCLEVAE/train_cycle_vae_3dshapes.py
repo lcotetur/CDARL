@@ -18,7 +18,7 @@ from cycle_vae import DisentangledVAE
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
-parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/CYCLEVAE/runs/3dshapes", type=str)
+parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/representation/CDARL/CYCLEVAE/runs/3dshapes", type=str)
 parser.add_argument('--batch-size', default=32, type=int)
 parser.add_argument('--nb-groups', default=2, type=int)
 parser.add_argument('--num-epochs', default=10000, type=int)
