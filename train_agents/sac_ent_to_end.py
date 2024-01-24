@@ -305,7 +305,7 @@ class VAE(nn.Module):
 
 
 class CycleVAE(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 3, flatten_size = 1024):
+    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 9, flatten_size = 1024):
         super(CycleVAE, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
@@ -378,9 +378,9 @@ def weight_init(m):
         if hasattr(m.bias, 'data'):
             m.bias.data.fill_(0.0)
 
-class EncoderCycleVae(nn.Module):
-    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 9, flatten_size = 1024):
-        super(EncoderCycleVae, self).__init__()
+class Encoder(nn.Module):
+    def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 12, flatten_size = 1024):
+        super(Encoder, self).__init__()
         self.class_latent_size = class_latent_size
         self.content_latent_size = content_latent_size
         self.flatten_size = flatten_size
@@ -418,9 +418,10 @@ class EncoderCycleVae(nn.Module):
         mu, logsigma, classcode = self.forward(x)
         return mu
 
-class DecoderCycleVae(nn.Module):
+
+class Decoder(nn.Module):
     def __init__(self, latent_size=32, output_channel=12, flatten_size=1024):
-        super(DecoderCycleVae, self).__init__()
+        super(Decoder, self).__init__()
 
         self.fc = nn.Linear(latent_size, flatten_size)
 
@@ -428,7 +429,7 @@ class DecoderCycleVae(nn.Module):
             nn.ConvTranspose2d(flatten_size, 128, 5, stride=2), nn.ReLU(),
             nn.ConvTranspose2d(128, 64, 5, stride=2), nn.ReLU(),
             nn.ConvTranspose2d(64, 32, 6, stride=2), nn.ReLU(),
-            nn.ConvTranspose2d(32, 12, 6, stride=2), nn.Sigmoid()
+            nn.ConvTranspose2d(32, output_channel, 6, stride=2), nn.Sigmoid()
         )
         self.apply(self._weights_init)
 
@@ -447,9 +448,8 @@ class DecoderCycleVae(nn.Module):
 class DisentangledVAE(nn.Module):
     def __init__(self, class_latent_size = 8, content_latent_size = 32, input_channel = 12, flatten_size = 1024):
         super(DisentangledVAE, self).__init__()
-        self.encoder = EncoderCycleVae(class_latent_size, content_latent_size, input_channel, flatten_size)
-        self.decoder = DecoderCycleVae(class_latent_size + content_latent_size, input_channel, flatten_size)
-        self.out_dim = content_latent_size
+        self.encoder = Encoder(class_latent_size, content_latent_size, input_channel, flatten_size)
+        self.decoder = Decoder(class_latent_size + content_latent_size, input_channel, flatten_size)
 
     def forward(self, x):
         mu, logsigma, classcode = self.encoder(x)
@@ -459,7 +459,6 @@ class DisentangledVAE(nn.Module):
         recon_x = self.decoder(latentcode)
 
         return mu, logsigma, classcode, recon_x
-
 
 class Actor(nn.Module):
     def __init__(self, args, encoder, obs_chape, action_shape, hidden_dim, log_std_min, log_std_max):
@@ -478,7 +477,7 @@ class Actor(nn.Module):
 
     def forward(self, x, compute_pi=True, compute_log_pi=True):
         with torch.no_grad():
-            x = self.encoder(x)
+            x, _, _ = self.encoder(x)
 
         mu, log_std = self.mlp(x).chunk(2, dim=-1)
         log_std = torch.tanh(log_std)
@@ -527,7 +526,7 @@ class Critic(nn.Module):
 
     def forward(self, x, action):
         with torch.no_grad():
-            x = self.encoder(x)
+            x, _, _ = self.encoder(x)
 
         return self.Q1(x, action), self.Q2(x, action)
 
@@ -545,13 +544,13 @@ class SAC(object):
         self.encoder_tau = args.encoder_tau
         self.soda_tau = args.soda_tau
         self.aux_beta = args.aux_beta
+        self.img_stack = args.img_stack
         self.vae_batchsize = args.vae_batch_size
-        self.counter = 0
         self.training_step = 0
-        self.vae_batches =0
+        self.vae_batches = 0
         self.vae_epoch = 0
 
-        self.model = DisentangledVAE(input_channel=obs_shape[0])
+        self.model = DisentangledVAE(input_channel=obs_shape[0]).cuda()
         self.actor = Actor(args, self.model.encoder, obs_shape, action_shape, 1024, -10, 2).cuda()
         self.critic = Critic(args, self.model.encoder, obs_shape, action_shape, 1024).cuda()
         self.critic_target = deepcopy(self.critic)
@@ -571,6 +570,7 @@ class SAC(object):
         self.training = training
         self.actor.train(training)
         self.critic.train(training)
+        self.model.train(training)
         if hasattr(self, 'pad_head'):
             self.pad_head.train(training)
         if hasattr(self, 'soda_predictor'):
@@ -604,7 +604,7 @@ class SAC(object):
         for param, target_param in zip(net.parameters(), target_net.parameters()):
             target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
             
-    def update(self, replay_buffer, logdir, num_updates):
+    def update(self, replay_buffer, algo, logdir, num_updates):
         self.training_step += 1
         for _ in range(num_updates):
             obs, action, reward, next_obs, not_done = replay_buffer.sample_sac()
@@ -647,12 +647,13 @@ class SAC(object):
 
             # update aux task
             if self.training_step % self.aux_update_freq == 0 and self.vae_batches < 100000:
-                for epoch in range(10):
-                    self.vae_batches += self.vae_batchsize
-                    self.vae_epoch += 1
+                print('update cycle vae')
+                for epoch in range(200):
+                    self.vae_batches += 1
 
                     obs, _, _, _, _ = replay_buffer.sample_sac(n=100)
-                    imgs = RandomTransform(obs).apply_transformations_stack(num_frames=3, nb_class=4, value=0.3)
+                    save_image(obs[:, :3, :, :], os.path.join(log_dir, "epoch_%d.png" % epoch), nrow=10)
+                    imgs = RandomTransform(obs).apply_transformations_stack(num_frames=self.img_stack, nb_class=5, value=0.3)
 
                     floss = 0
                     for i_class in range(imgs.shape[0]):
@@ -664,14 +665,13 @@ class SAC(object):
                     imgs = imgs.reshape(-1, *imgs.shape[2:]) 
                     bloss = backward_loss(imgs, self.model)
 
-                    loss = floss + bloss * 1 #args.bloss_coef
+                    self.cycle_vae_optimizer.zero_grad()
+                    (floss + bloss * args.bloss_coef).backward()
+                    self.cycle_vae_optimizer.step()
 
-                    self.vae_optimizer.zero_grad()
-                    loss.backward()
-                    self.vae_optimizer.step()
-
+                    loss = floss + bloss * args.bloss_coef
                     # save image to check and save model 
-                    if self.vae_batches % 1280 == 0:
+                    if self.vae_batches % 4000 == 0:
                         print(f'{self.vae_epoch} Epoch ------ {self.vae_batches} Batches is Done ------ {loss.item()} loss')
                         rand_idx = torch.randperm(imgs.shape[0])
                         imgs1 = imgs[rand_idx[:9]]
@@ -682,9 +682,10 @@ class SAC(object):
                             recon_imgs1 = self.model.decoder(torch.cat([mu, classcode1], dim=1))
                             recon_combined = self.model.decoder(torch.cat([mu, classcode2], dim=1))
 
-                        saved_imgs = torch.cat([imgs1[:, 9:12, :, :], imgs2[:, 9:12, :, :], recon_imgs1[:, 9:12, :, :], recon_combined[:, 9:12, :, :]], dim=0)
-                        save_image(saved_imgs, os.path.join(log_dir, "stack%d_%d.png"  % (self.vae_epoch, self.vae_batches)), nrow=9)
+                        saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
+                        save_image(saved_imgs[:, :3, :, :], os.path.join(log_dir, "stack%d_%d.png" % (self.vae_epoch, self.vae_batches)), nrow=9)
                         torch.save(self.model.encoder.state_dict(), os.path.join(log_dir, "encoder.pt"))
+                self.vae_epoch += 1
 
 
 
@@ -724,7 +725,7 @@ if __name__ == "__main__":
         if done or die:
             if step > 1000:
                 num_updates = 1
-                print('update')
+                print('update agent')
                 agent.update(replay_buffer, args.algo, log_dir, num_updates)
             
             sac_running_score = sac_running_score * 0.99 + score * 0.01

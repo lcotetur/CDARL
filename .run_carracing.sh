@@ -8,6 +8,7 @@
 echo "Date:     $(date)"
 echo "Hostname: $(hostname)"
 
+# LUSR CONDA ENV
 salloc --gres=gpu:1 -c 4 --mem=32G -t 30:00:00 --partition=unkillable --constraint=turing
 
 module load anaconda/3 
@@ -15,10 +16,6 @@ module load anaconda/3
 module load singularity
 
 conda activate LUSR
-
-# canvas display
-export PYTHONPATH="${PYTHONPATH}:`pwd`"
-Xvfb :1 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &> xvfb.log & export DISPLAY=:1
 
 # ray connection - only if running main_carracing
 ray start --head --num-cpus=4 --object-store-memory=10000000000 --memory=20000000000
