@@ -1,7 +1,7 @@
 import torch
 from torch import optim
 from torch.nn import functional as F
-from torch.utils.tensorboard import SummaryWriter
+#from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
@@ -21,7 +21,7 @@ parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/
 parser.add_argument('--data-tag', default='weather', type=str, help='files with data_tag in name under data directory will be considered as collected states')
 parser.add_argument('--num-splitted', default=1, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carla", type=str)
-parser.add_argument('--batch-size', default=10, type=int)
+parser.add_argument('--batch-size', default=5, type=int)
 parser.add_argument('--num-epochs', default=50, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--learning-rate', default=0.0001, type=float)
@@ -29,9 +29,9 @@ parser.add_argument('--beta', default=10, type=int)
 parser.add_argument('--save-freq', default=19000, type=int)
 parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
-parser.add_argument('--latent-size', default=32, type=int)
+parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--flatten-size', default=9216, type=int)
-parser.add_argument('--random-augmentations', default=True, type=bool)
+parser.add_argument('--random-augmentations', default=False, type=bool)
 parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
 parser.add_argument('--verbose', default=True, type=bool)
 args = parser.parse_args()
@@ -66,25 +66,28 @@ def main():
     for i_epoch in epoch_generator:
         for i_split in range(args.num_splitted):
             for i_batch, imgs in enumerate(loader):
-
-                
                 batch_count += 1
-
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs_repeat = imgs.repeat(2, 1, 1, 1)
-                if args.random_augmentations:
-                    imgs = RandomTransform(imgs_repeat).apply_transformations(nb_class=2, value=0.3, random_crop=False)
-                    feature_1 = imgs[0]
-                    feature_2 = imgs[1]
-                else:
-                    n = imgs.shape[0]
-                    print(imgs.shape[0])
-                    feature_1 = imgs[:int(n/2), :, :, :]
-                    print(feature_1.shape)
-                    feature_2 = imgs[int(n/2):, :, :, :]
-                optimizer.zero_grad()
+                
+                # Content
+                imgs_content = imgs.repeat(2, 1, 1, 1, 1).permute(1,0,2,3,4)
+                imgs_content = imgs_content.reshape(-1, *imgs.shape[2:])
+                m = int(imgs_content.shape[0]/2)
 
+                # Style
+                imgs_style = imgs.repeat(2, 1, 1, 1, 1)
+                n = int(imgs_style.shape[0]/2)
+                imgs_style1 = imgs_style[:n, :, :, :, :]
+                imgs_style2 = imgs_style[n:, :, :, :, :]
+                idx = torch.randperm(3)
+                imgs_style1 = imgs_style1[idx].view(imgs_style1.size())
+                imgs_style1= imgs_style1.reshape(-1, *imgs_style1.shape[2:])
+                imgs_style2= imgs_style2.reshape(-1, *imgs_style2.shape[2:])
+
+                feature_1 = torch.cat((imgs_style1, imgs_content[:m, :, :, :]), dim=0)
+                feature_2 = torch.cat((imgs_style2, imgs_content[m:, :, :, :]), dim=0)
+
+                optimizer.zero_grad()
                 loss = compute_loss(model, feature_1, feature_2, beta=args.beta)
 
                 loss.backward()
@@ -93,8 +96,8 @@ def main():
                 # save image to check and save model 
                 if i_batch % args.save_freq == 0:
                     print("%d Epochs, %d Splitted Data, %d Batches is Done." % (i_epoch, i_split, i_batch))
-                    imgs1 = imgs[0][:10]
-                    imgs2 = imgs[1][:10]
+                    imgs1 = feature_1[:10]
+                    imgs2 = feature_2[:10]
                     with torch.no_grad():
                         mu, logsigma = model.encoder(imgs1)
                         mu2, logsigma2 = model.encoder(imgs2)
@@ -110,7 +113,7 @@ def main():
                     torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_adagvae.pt"))
 
             # load next splitted data
-            updateloader(loader, dataset)
+            updateloader(args, loader, dataset)
 
 if __name__ == '__main__':
     main()

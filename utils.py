@@ -45,12 +45,7 @@ def seed_everything(seed):
     torch.random.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-def seed_torch(seed):
-    torch.manual_seed(seed)
-    torch.random.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
 
 def create_logs(args, algo_name=False, repr=None):
     # create directories
@@ -105,7 +100,7 @@ class RandomTransform():
     def __init__(self, imgs):
         self.imgs = imgs
 
-    def apply_transformations(self, nb_class=5, value=0.3, output_size=64, random_crop=True):
+    def apply_random_transformations(self, nb_class=5, value=0.3, output_size=64, random_crop=True):
         m = int(self.imgs.shape[0]/nb_class)
 
         transforms = []
@@ -114,67 +109,112 @@ class RandomTransform():
                 if random_crop:
                     transforms.append(self.random_crop(self.imgs[i*m:(i+1)*m, :, :, :], output_size))
                 else:
-                    transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value))
+                    transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :], value))
             if i == nb_class:
                 return torch.stack(transforms)
             elif(i != 0 and i != nb_class):
                 if value == None:
                     transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :]))
                 else:
-                    transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value))
+                    transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :], value))
 
-    def apply_transformations_stack(self, num_frames=3, nb_class=5, value=0.3, output_size=64, random_crop=True):
+    def apply_transformations(self, nb_class=5, value=[0.1, 0.2, 0.3, 0.4, 0.5], output_size=64, random_crop=False):
+        m = int(self.imgs.shape[0]/nb_class)
+
+        transforms = []
+        for i in range(nb_class+1):
+            if i == 0:
+                if random_crop:
+                    transforms.append(self.random_crop(self.imgs[i*m:(i+1)*m, :, :, :], output_size))
+                else:
+                    transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[0]))
+            if i == nb_class:
+                return torch.stack(transforms)
+            elif(i == 1):
+                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[1]))
+            elif(i == 2):
+                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[2]))
+            elif(i == 3):
+                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[3]))
+            elif(i == 4):
+                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[4]))
+
+    def apply_random_transformations_stack(self, num_frames=3, nb_class=5, value=0.3, output_size=64, random_crop=True):
         m = int(self.imgs.shape[0]/nb_class) * num_frames
-        imgs = self.imgs.reshape(-1,3,64,64)
+        imgs = self.imgs.reshape(-1,3,output_size,output_size)
         transforms = []
         for i in range(nb_class+1):
             if i == 0:
                 if random_crop:
                     transformed_img = self.random_crop(imgs[i*m:(i+1)*m, :, :, :], output_size)
-                    transforms.append(transformed_img.reshape(-1, 3*num_frames, 64, 64))
+                    transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
                 else:
                     transformed_img = self.jitter(imgs[i*m:(i+1)*m, :, :, :], value)
-                    transforms.append(transformed_img.reshape(-1, 3*num_frames, 64, 64))
+                    transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
             if i == nb_class:
-                img = torch.stack(transforms).reshape(-1, 3*num_frames, 64, 64)
+                img = torch.stack(transforms).reshape(-1, 3*num_frames, output_size, output_size)
                 return torch.stack(transforms)
             elif(i != 0 and i != nb_class):
                 if value == None:
                     transformed_img = self.random_jitter(imgs[i*m:(i+1)*m, :, :, :])
-                    transforms.append(transformed_img.reshape(-1, 3*num_frames, 64, 64))
+                    transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
                 else:
                     transformed_img = self.jitter(imgs[i*m:(i+1)*m, :, :, :], value)
-                    transforms.append(transformed_img.reshape(-1, 3*num_frames, 64, 64))
+                    transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
+
+    def apply_transformations_stack(self, num_frames=3, nb_class=5, value=[0.1, 0.2, 0.3, 0.4, 0.5], output_size=64, random_crop=True):
+        m = int(self.imgs.shape[0]/nb_class) * num_frames
+        imgs = self.imgs.reshape(-1,3,output_size,output_size)
+        transforms = []
+        for i in range(nb_class+1):
+            if i == 0:
+                if random_crop:
+                    transformed_img = self.random_crop(imgs[i*m:(i+1)*m, :, :, :], output_size)
+                    transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
+                else:
+                    transformed_img = self.jitter(imgs[i*m:(i+1)*m, :, :, :], value=value[0])
+                    transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
+            if i == nb_class:
+                img = torch.stack(transforms).reshape(-1, 3*num_frames, output_size, output_size)
+                return torch.stack(transforms)
+            elif(i == 1):
+                transformed_img = self.jitter(imgs[i*m:(i+1)*m, :, :, :], value=value[1])
+                transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
+            elif(i == 2):
+                transformed_img = self.jitter(imgs[i*m:(i+1)*m, :, :, :], value=value[2])
+                transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
+            elif(i == 3):
+                transformed_img = self.jitter(imgs[i*m:(i+1)*m, :, :, :], value=value[3])
+                transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
+            elif(i == 4):
+                transformed_img = self.jitter(imgs[i*m:(i+1)*m, :, :, :], value=value[4])
+                transforms.append(transformed_img.reshape(-1, 3*num_frames, output_size, output_size))
 
     def domain_transformation(self, value=0.5, crop=False):
         if value == None:
             return self.imgs
         elif crop == True:
-            return self.domain_jitter(self.random_crop(self.imgs), value)
+            return self.jitter(self.random_crop(self.imgs), value)
         else:
-            return self.domain_jitter(self.imgs, value)
+            return self.jitter(self.imgs, value)
 
     def domain_transformation_stack(self, value=0.5, crop=False, num_frames=3, output_size=64):
-        imgs = self.imgs.reshape(-1,3,64,64)
+        imgs = self.imgs.reshape(-1,3,output_size,output_size)
         if value == None:
             return self.imgs
         elif crop == True:
-            t_img = self.domain_jitter(self.random_crop(imgs), value)
+            t_img = self.jitter(self.random_crop(imgs), value)
             return t_img.reshape(-1, 3*num_frames, 64, 64).squeeze(0)
         else:
-            t_img = self.domain_jitter(imgs, value)
+            t_img = self.jitter(imgs, value)
             return t_img.reshape(-1, 3*num_frames, 64, 64).squeeze(0)
 
-    def domain_jitter(self, imgs, value):
+    def jitter(self, imgs, value):
         imgs = TF.adjust_hue(imgs, value)
         return imgs
 
-    def jitter(self, imgs, value):
-        imgs = transforms.ColorJitter(hue=(value))(imgs)
-        return imgs
-
-    def random_jitter(self, imgs):
-        imgs = transforms.ColorJitter(hue=(-0.5,0.5))(imgs)
+    def random_jitter(self, imgs, value):
+        imgs = transforms.ColorJitter(hue=(-value,value))(imgs)
         return imgs
 
     def random_blur(self, imgs):
