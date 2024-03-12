@@ -6,20 +6,26 @@ import gym_carla
 import carla
 import numpy as np
 import argparse
+import os
 import random 
+from torchvision.utils import save_image
 import rlcodebase
 from rlcodebase.agent import PPOAgent
 from rlcodebase.utils import Config, Logger
-from torch.utils.tensorboard import SummaryWriter
-from model import CarlaLatentPolicy, CarlaImgPolicy
+#from torch.utils.tensorboard import SummaryWriter
+from CDARL.utils import seed_everything, create_logs 
+from CDARL.model import CarlaLatentPolicy, CarlaImgPolicy
+from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, CoordConv2d, GaussianEncoder
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--weather', default=0, type=int)
 parser.add_argument('--action-repeat', default=1, type=int)
 parser.add_argument('--algo', default='ilcm', type=str)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/LUSR/checkpoints/policy_train_v2_offline.pt', type=str)
-parser.add_argument('--use-encoder', default=False, action='store_true')
-parser.add_argument('--encoder-path', default='./', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/carla_logs/ilcm/2024-02-17_0/200000-model.pt', type=str)
+parser.add_argument('--use-encoder', default=True, action='store_true')
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-14_1_reduce_dim/model_step_50000.pt', type=str) 
+parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-15/model_step_50000.pt', type=str)
 parser.add_argument('--latent-size', default=16, type=int, help='dimension of latent state embedding')
 parser.add_argument('--port', default=2000, type=int)
 parser.add_argument('--num-eval', default=10, type=int)
@@ -32,7 +38,7 @@ parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/CDARL'
 parser.add_argument('--nb_domain', default=4, type=int)
 args = parser.parse_args()
 
-weathers = [carla.WeatherParameters.ClearNoon, carla.WeatherParameters.HardRainNoon, carla.WeatherParameters(50, 0, 0, 0.35, 0, -40)]
+weathers = [carla.WeatherParameters.ClearNoon, carla.WeatherParameters.HardRainNoon, carla.WeatherParameters.WetCloudySunset, carla.WeatherParameters(50, 0, 0, 0.35, 0, -40), carla.WeatherParameters.HardRainSunset, carla.WeatherParameters.ClearSunset]
 weather = weathers[args.weather]
 start_point = (75, -10, 2.25)
 end_point = (5, -242, 2.25)
@@ -70,19 +76,21 @@ params = {
 }
 
 class VecGymCarla:
-    def __init__(self, env, action_repeat, encoder=None, main=None):
+    def __init__(self, env, action_repeat, encoder=None, causal=None):
         self.env = env
         self.action_repeat = action_repeat
         self.encoder = encoder
-        self.main = main
+        self.causal = causal
         self.action_space = self.env.action_space
         if self.encoder:
-            self.observation_space = spaces.Box(low=-1000, high=1000, shape=(32+1,), dtype=np.float)
+            self.observation_space = spaces.Box(low=-1000, high=1000, shape=(16+1,), dtype=np.float)
         else:
             self.observation_space = spaces.Box(low=0, high=255, shape=(3*128*128+1,), dtype=np.uint8)
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         if self.encoder:
             self.encoder = self.encoder.to(self.device)
+        if self.causal:
+            self.causal = self.causal.to(self.device)
         self.episodic_return = 0
         self.episodic_len = 0
 
@@ -119,14 +127,15 @@ class VecGymCarla:
         else:
             obs = np.transpose(s['camera'], (2,0,1))
             obs = np.expand_dims(obs, axis=0)
+            save_image(torch.tensor(obs)/255, os.path.join('/home/mila/l/lea.cote-turcotte/CDARL/checkimages', "%s.png" % weathers[args.weather]))
             obs = torch.from_numpy(obs).float().to(self.device)
             if args.algo == 'cycle_vae' or args.algo == 'vae' or args.algo == 'adagvae':
                 with torch.no_grad():
                     obs = self.encoder(obs).cpu().squeeze().numpy()
             elif args.algo == 'ilcm':
                 with torch.no_grad():
-                    z, _ = self.encoder.encoder.mean_st(obs)
-                    obs = self.main.encode_to_causal(z).cpu().squeeze().numpy()
+                    z, _ = self.encoder.encoder.mean_std(obs/255)
+                    obs = self.causal.encode_to_causal(z).cpu().squeeze().numpy()
             elif args.algo == 'disent':
                 with torch.no_grad():
                     content, _, style = self.encoder(obs)
@@ -169,8 +178,8 @@ def create_img_scm():
     return scm
 
 def create_img_encoder_decoder():
-    encoder = ImageEncoder(
-            in_resolution=64,
+    encoder = ImageEncoderCarla(
+            in_resolution=128,
             in_features=3,
             out_features=32,
             hidden_features=32,
@@ -183,9 +192,9 @@ def create_img_encoder_decoder():
             min_std=1.e-3,
             permutation=0,
             )
-    decoder = ImageDecoder(
+    decoder = ImageDecoderCarla(
             in_features=32,
-            out_resolution=64,
+            out_resolution=128,
             out_features=3,
             hidden_features=32,
             batchnorm=False,
@@ -213,10 +222,55 @@ def create_ilcm():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=6,
+            dim_z=16,
             )
 
     return model
+
+def create_intervention_encoder():
+    intervention_encoder = HeuristicInterventionEncoder()
+    return intervention_encoder
+
+def create_mlp_encoder_decoder():
+    """Create encoder and decoder"""
+
+    encoder_hidden_layers = 5
+    encoder_hidden = [64 for _ in range(encoder_hidden_layers)]
+    decoder_hidden_layers = 5
+    decoder_hidden = [64 for _ in range(decoder_hidden_layers)]
+
+    encoder = GaussianEncoder(
+                hidden=encoder_hidden,
+                input_features=32,
+                output_features=16,
+                fix_std=False,
+                init_std=0.01,
+                min_std=0.0001,
+            )
+    decoder = GaussianEncoder(
+                hidden=decoder_hidden,
+                input_features=16,
+                output_features=32,
+                fix_std=True,
+                init_std=1.0,
+                min_std=0.001,
+            )
+
+    return encoder, decoder
+
+def create_scm():
+    """Creates an SCM"""
+
+    scm = MLPImplicitSCM(
+            graph_parameterization='none',
+            manifold_thickness=0.01,
+            hidden_units=100,
+            hidden_layers=2,
+            homoskedastic=False,
+            dim_z=16,
+            min_std=0.2,
+        )
+    return scm
 
 # adagvae, vae and cycle-vae model
 class Encoder(nn.Module):
@@ -258,7 +312,7 @@ class EncoderD(nn.Module):
     def forward(self, x):
         x = self.main(x)
         x = x.view(x.size(0), -1)
-        mu = self.linear_mu(x)
+        mu = self.linear_mu(x/255)
         logsigma = self.linear_logsigma(x)
         classcode = self.linear_classcode(x)
 
@@ -267,8 +321,8 @@ class EncoderD(nn.Module):
 def main():
     seed_everything(args.seed)
 
-    video_dir = os.path.join(args.work_dir, 'video')
-    video = VideoRecorder(video_dir if args.save_video else None)
+    #video_dir = os.path.join(args.work_dir, 'video')
+    #video = VideoRecorder(video_dir if args.save_video else None)
     # prepare env
     encoder = None
     main = None
@@ -282,25 +336,24 @@ def main():
             encoder.load_state_dict(weights)
         elif args.algo == 'ilcm':
             print('causal')
-            latent_size = 6
+            latent_size = 16
             encoder = create_model_reduce_dim()
-            if custom_config['encoder_path'] is not None:
-                # saved checkpoints could contain extra weights such as linear_logsigma 
-                weights = torch.load(custom_config['encoder_path'], map_location=torch.device('cpu'))
-                for k in list(weights.keys()):
-                    if k not in encoder.state_dict().keys():
-                        del weights[k]
-                encoder.load_state_dict(weights)
-                print("Loaded Weights Encoder")
             main = create_ilcm()
-            if custom_config['ilcm_path'] is not None:
-                # saved checkpoints could contain extra weights such as linear_logsigma 
-                weights = torch.load(custom_config['ilcm_path'], map_location=torch.device('cpu'))
-                for k in list(weights.keys()):
-                    if k not in main.state_dict().keys():
-                        del weights[k]
-                main.load_state_dict(weights)
-                print("Loaded Weights Main")
+            # saved checkpoints could contain extra weights such as linear_logsigma 
+            weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
+            for k in list(weights.keys()):
+                if k not in encoder.state_dict().keys():
+                    del weights[k]
+            encoder.load_state_dict(weights)
+            print("Loaded Weights Encoder")
+
+            # saved checkpoints could contain extra weights such as linear_logsigma 
+            weights = torch.load(args.ilcm_path, map_location=torch.device('cpu'))
+            for k in list(weights.keys()):
+                if k not in main.state_dict().keys():
+                    del weights[k]
+            main.load_state_dict(weights)
+            print("Loaded Weights Main")
         elif args.algo == 'disent':
             class_latent_size = 16
             content_latent_size = 32
@@ -312,7 +365,7 @@ def main():
             encoder.load_state_dict(weights)
 
     carla_env = gym.make('carla-v0', params=params)
-    env.seed(args.seed)
+    carla_env.seed(args.seed)
     env = VecGymCarla(carla_env, args.action_repeat, encoder, main)
 
     # prepare model
@@ -335,13 +388,13 @@ def main():
         for i in info:
             if i['episodic_return'] is not None:
                 res.append(i['episodic_return'])
-                print(i['episodic_return'])
 
     print("Average Score", np.mean(res))
-    with open(os.path.join(args.save_path, 'weather_%s_' % args.weather, 'results_%s.txt' % args.algo), 'w') as f:
+    with open(os.path.join(args.save_path, 'weather_%s_results_%s.txt' % (args.weather, args.algo)), 'w') as f:
         f.write('score = %s\n' % res)
         f.write('mean_scores = %s\n' % np.mean(res))
         f.write('model = %s\n' % args.model_path)
+        f.write('weather = %s\n' % weathers[args.weather])
 
 
 if __name__ == '__main__':

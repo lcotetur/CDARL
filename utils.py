@@ -104,40 +104,34 @@ class RandomTransform():
         m = int(self.imgs.shape[0]/nb_class)
 
         transforms = []
-        for i in range(nb_class+1):
+        for i in range(nb_class):
             if i == 0:
                 if random_crop:
                     transforms.append(self.random_crop(self.imgs[i*m:(i+1)*m, :, :, :], output_size))
                 else:
                     transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :], value))
-            if i == nb_class:
-                return torch.stack(transforms)
-            elif(i != 0 and i != nb_class):
+            else:
                 if value == None:
                     transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :]))
                 else:
                     transforms.append(self.random_jitter(self.imgs[i*m:(i+1)*m, :, :, :], value))
+            if i == nb_class-1:
+                return torch.stack(transforms)
 
     def apply_transformations(self, nb_class=5, value=[0.1, 0.2, 0.3, 0.4, 0.5], output_size=64, random_crop=False):
         m = int(self.imgs.shape[0]/nb_class)
 
         transforms = []
-        for i in range(nb_class+1):
+        for i in range(nb_class):
             if i == 0:
                 if random_crop:
                     transforms.append(self.random_crop(self.imgs[i*m:(i+1)*m, :, :, :], output_size))
                 else:
                     transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[0]))
-            if i == nb_class:
+            else:
+                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[i]))
+            if i == nb_class-1:
                 return torch.stack(transforms)
-            elif(i == 1):
-                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[1]))
-            elif(i == 2):
-                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[2]))
-            elif(i == 3):
-                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[3]))
-            elif(i == 4):
-                transforms.append(self.jitter(self.imgs[i*m:(i+1)*m, :, :, :], value=value[4]))
 
     def apply_random_transformations_stack(self, num_frames=3, nb_class=5, value=0.3, output_size=64, random_crop=True):
         m = int(self.imgs.shape[0]/nb_class) * num_frames

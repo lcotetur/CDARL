@@ -10,30 +10,32 @@ from torchvision.utils import save_image
 import numpy as np
 import argparse
 import os
+import warnings
 
 from metrics import gaussian_total_correlation, gaussian_wasserstein_correlation, gaussian_wasserstein_correlation_norm
 from metrics import compute_mig, mutual_information_score, compute_dci
 from CDARL.data.shapes3d_data import Shape3dDataset
 
-from CDARL.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from CDARL.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d
+from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
+from CDARL.representation.ILCM.model import GaussianEncoder, ImageEncoder, ImageDecoder, CoordConv2d, Encoder3dshapes, Decoder3dshapes
 from CDARL.utils import seed_everything
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
 parser.add_argument('--batch-size', default=16, type=int)
-parser.add_argument('--num-train', default=100, type=int) #10000
-parser.add_argument('--num-test', default=50, type=int) #5000
+parser.add_argument('--num-train', default=1000, type=int) #10000
+parser.add_argument('--num-test', default=500, type=int) #5000
 parser.add_argument('--num-workers', default=4, type=int)
-parser.add_argument('--encoder-type', default='ilcm', type=str)
+parser.add_argument('--encoder-type', default='adagvae', type=str)
 parser.add_argument('--num-episodes', default=1, type=int)
 parser.add_argument('--eval-steps', default=2, type=int)
 parser.add_argument('--supervised', default=True, type=bool)
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2023-11-21/model_step_188000.pt', type=str)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-01-15/model_step_180000.pt', type=str)
-parser.add_argument('--latent-size', default=8, type=int)
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/3dshapes/2024-02-22/model_reduce_dim_6000.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/3dshapes/2024-03-09_0/encode_3dshapes.pt', type=str)
+parser.add_argument('--latent-size', default=10, type=int)
 parser.add_argument('--seed', default=1, type=int)
-parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
+parser.add_argument('--boost-mode', default="sklearn", type=str)
+parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results/3dshapes', type=str)
 parser.add_argument('--work-dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 args = parser.parse_args()
 
@@ -72,7 +74,7 @@ def create_img_scm():
     return scm
 
 def create_img_encoder_decoder():
-    encoder = ImageEncoder(
+    encoder = Encoder3dshapes(
             in_resolution=64,
             in_features=3,
             out_features=32,
@@ -86,7 +88,7 @@ def create_img_encoder_decoder():
             min_std=1.e-3,
             permutation=0,
             )
-    decoder = ImageDecoder(
+    decoder = Decoder3dshapes(
             in_features=32,
             out_resolution=64,
             out_features=3,
@@ -301,6 +303,58 @@ class Decoder(nn.Module):
         x = self.main(x)
         return x
 
+class Encoder3dshapes(nn.Module):
+    def __init__(self, latent_size = 10, input_channel = 3, flatten_size = 1024):
+        super(Encoder3dshapes, self).__init__()
+        self.z_total = latent_size
+
+        self.model = nn.Sequential(
+            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=4, stride=2, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=2),
+            nn.ReLU(inplace=True),  # This was reverted to kernel size 4x4 from 2x2, to match beta-vae paper
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=4, stride=2, padding=2),
+            nn.ReLU(inplace=True),  # This was reverted to kernel size 4x4 from 2x2, to match beta-vae paper
+            nn.Flatten(),
+            nn.Linear(in_features=1600, out_features=256),
+            nn.ReLU(inplace=True)
+        )
+
+        self.linear_mu = nn.Linear(256, self.z_total)
+        self.linear_logsigma = nn.Linear(256, self.z_total)
+
+    def forward(self, x):
+        z = self.model(x)
+        mu, logsigma = self.linear_mu(z), self.linear_logsigma(z)
+
+        return mu, logsigma
+
+class Decoder3dshapes(nn.Module):
+    def __init__(self, latent_size = 10, output_channel = 3, flatten_size=1024):
+        super(Decoder3dshapes, self).__init__()
+        self.z_size=latent_size
+
+        self.model = nn.Sequential(
+            nn.Linear(in_features=self.z_size, out_features=256),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_features=256, out_features=1024),
+            nn.ReLU(inplace=True),
+            nn.Unflatten(dim=1, unflattened_size=(64, 4, 4)),
+            nn.ConvTranspose2d(in_channels=64, out_channels=64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(in_channels=32, out_channels=3, kernel_size=4, stride=2, padding=1),
+        )
+
+    def forward(self, x):
+        x = self.model(x)
+        return x
+
 class MyModel(nn.Module):
     def __init__(self, encoder_type, deterministic_sample=False, latent_size=16):
         nn.Module.__init__(self)
@@ -314,20 +368,22 @@ class MyModel(nn.Module):
 
         # evaluate entangle representation
         elif self.encoder_type == 'vae':
-            latent_size = 12
+            latent_size = args.latent_size
             self.encoder = Encoder(latent_size=latent_size)
             self.decoder = Decoder(latent_size)
 
         # evaluate invariant representation
         elif self.encoder_type == 'adagvae':
             latent_size = args.latent_size
+            #self.encoder = Encoder3dshapes()
+            #self.decoder = Decoder3dshapes() 
             self.encoder = Encoder(latent_size=latent_size)
             self.decoder = Decoder(latent_size)
 
         # evaluate disentangled representation
         elif self.encoder_type == 'cycle_vae':
             class_latent_size = 8
-            content_latent_size = 32
+            content_latent_size = 16
             latent_size = class_latent_size + content_latent_size
             self.encoder = EncoderD(class_latent_size, content_latent_size)
             self.decoder = Decoder(latent_size)
@@ -347,7 +403,7 @@ class MyModel(nn.Module):
 
             weights = torch.load(args.model_path, map_location=torch.device('cpu'))
             self.model.load_state_dict(weights)
-            print("Loaded Weights")
+            print("Loaded Weights Reduce Dim Ilcm")
 
         # evaluate representation ilcm
         elif self.encoder_type == 'ilcm':
@@ -357,11 +413,11 @@ class MyModel(nn.Module):
 
             weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
             self.encoder.load_state_dict(weights)
-            print("Loaded Weights")
+            print("Loaded Weights Reduce Dim Ilcm")
 
             weights = torch.load(args.model_path, map_location=torch.device('cpu'))
             self.model.load_state_dict(weights)
-            print("Loaded Weights")
+            print("Loaded Weights Ilcm")
 
     def forward(self, x):
         with torch.no_grad():
@@ -377,12 +433,14 @@ class MyModel(nn.Module):
                 features = torch.cat([mu_s, mu], dim=1)
                 recon = self.decoder(features)
             elif self.encoder_type == 'ilcm':
-                e, _ = self.encoder.encoder.mean_std(x)
-                features = self.model.encode_to_causal(e)
+                z, _ = self.encoder.encoder.mean_std(x)
+                features = self.model.encode_to_causal(z)
                 recon = self.encoder.encode_decode(x)
         return features, recon
 
 def evaluate():
+    warnings.filterwarnings("ignore")
+    print(args.boost_mode)
     seed_everything(args.seed)
     model = MyModel(args.encoder_type)
     if args.encoder_type != 'ilcm':
@@ -400,8 +458,6 @@ def evaluate():
     img_batch = dataset.sample_random_batch(args.num_train)
     img_batch = dataset.process_obs(img_batch, device)
     feature, recon = model(img_batch)
-    save_image(img_batch, "/home/mila/l/lea.cote-turcotte/CDARL/evaluate/3dshapes_%s_img.png" % (args.encoder_type))
-    save_image(recon, "/home/mila/l/lea.cote-turcotte/CDARL/evaluate/3dshapes_%s_recon.png" % (args.encoder_type))
     recon_loss = reconstruction_loss(img_batch, recon)
     results['recon_loss'] = recon_loss.item()
     saved_imgs = torch.cat([img_batch[:10], recon[:10]], dim=0)
@@ -427,7 +483,7 @@ def evaluate():
         results['mig_score'] = mig_score["discrete_mig"] 
         print('mig_score')
 
-        dci_score = compute_dci(dataset, model, num_train=args.num_train, num_test=args.num_test, batch_size=args.batch_size)
+        dci_score = compute_dci(dataset, model, num_train=args.num_train, num_test=args.num_test, batch_size=args.batch_size, boost_mode=args.boost_mode)
         results['dci_disent_score'] = dci_score["disentanglement"] 
         results['dci_comp_score'] = dci_score["completeness"] 
         results['dci_infotrain_score'] = dci_score["informativeness_train"]

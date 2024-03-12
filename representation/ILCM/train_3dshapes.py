@@ -37,11 +37,11 @@ from experiment_utils import (
     frequency_check,
 )
 from model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from model import ImageEncoder, ImageDecoder, CoordConv2d
+from model import ImageEncoder, ImageDecoder, CoordConv2d, Encoder3dshapes, Decoder3dshapes
 from training import VAEMetrics
 
 
-@hydra.main(version_base=None, config_path="config", config_name="ilcm_reduce_dim")
+@hydra.main(version_base=None, config_path="config", config_name="reduce_dim_ilcm")
 def main(cfg):
     """High-level experiment function"""
     log_dir = os.path.join(cfg.data.save_path, str(date.today()))
@@ -59,6 +59,7 @@ def main(cfg):
     model = create_model_reduce_dim(cfg)
     train(cfg, model, results, log_dir)
     save_model(log_dir, model)
+    save_representations(cfg, model, data)
 
     # Save results
     results.save_logs(cfg.data.save_path, str(date.today()))
@@ -107,7 +108,7 @@ def create_encoder_decoder(cfg):
     """Create encoder and decoder"""
     logger.info(f"Creating {cfg.model.encoder.type} encoder / decoder")
 
-    encoder = ImageEncoder(
+    encoder = Encoder3dshapes(
             in_resolution=cfg.model.dim_x[2],
             in_features=cfg.model.dim_x[0],
             out_features=cfg.model.dim_z,
@@ -121,7 +122,7 @@ def create_encoder_decoder(cfg):
             min_std=cfg.model.encoder.min_std,
             permutation=cfg.model.encoder.permutation,
             )
-    decoder = ImageDecoder(
+    decoder = Decoder3dshapes(
             in_features=cfg.model.dim_z,
             out_resolution=cfg.model.dim_x[2],
             out_features=cfg.model.dim_x[0],
@@ -154,7 +155,7 @@ def create_intervention_encoder(cfg):
 # noinspection PyTypeChecker
 def train(cfg, model, results, log_dir):
     """High-level training function"""
-    seed_torch(cfg.general.seed)
+    seed_everything(cfg.general.seed)
 
     logger.info("Starting training")
     logger.info(f"Training on {cfg.training.device}")
@@ -208,7 +209,7 @@ def train(cfg, model, results, log_dir):
 
         x1, x2 = (x1.to(device), x2.to(device))
 
-            # Model forward pass
+        # Model forward pass
         log_prob, model_outputs = model(
                 x1,
                 x2,
@@ -243,13 +244,15 @@ def train(cfg, model, results, log_dir):
 
         # Log loss and metrics
         step += 1
-        results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
-        results.save_logs(cfg.data.save_path, str(date.today()))
         #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
 
         # Save model checkpoint
         if frequency_check(step, cfg.training.save_model_every_n_steps):
             save_model(log_dir, model, f"model_reduce_dim_{step}.pt")
+
+            if step > 6000:
+                save_representations(cfg, model, data)
+
             imgs1 = x1
             with torch.no_grad():
                 recon1 = model.encode_decode(imgs1)
@@ -257,6 +260,9 @@ def train(cfg, model, results, log_dir):
             # save images
             path_image = os.path.join(log_dir, f'recon_{step}.png')
             save_image(saved_imgs, path_image, nrow=10)
+
+            results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
+            results.save_logs(log_dir)
             results.generate_plot(log_dir,log_dir)
             # save metrics
             with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
@@ -279,7 +285,6 @@ def train(cfg, model, results, log_dir):
     set_manifold_thickness(cfg, model, None)
 
     return train_metrics
-
 
 def get_dataloader(cfg, batchsize=32, shuffle=False, include_noise_encodings=False):
     """Load data from disk and return DataLoader instance"""
@@ -320,6 +325,57 @@ def epoch_schedules(cfg, model, epoch, optim):
         logger.info(f"Switching to deterministic intervention encoder at epoch {epoch}")
 
     return model_interventions, pretrain, deterministic_intervention_encoder
+
+
+@torch.no_grad()
+def save_representations(cfg, model, data):
+    """Reduces dimensionality for full dataset by pushing images through encoder"""
+    print("Encoding full datasets and storing representations")
+
+    device = torch.device(cfg.training.device)
+    model.to(device)
+
+    for partition in ["train", "test", "val"]:
+        z0s, z1s, true_z0s, true_z1s = [], [], [], []
+        intervention_labels, interventions, true_e0s, true_e1s = [], [], [], []
+
+        for epoch in range(1000):
+            print(epoch)
+            if partition == "train":
+                imgs, true_latents = data.create_weak_vae_batch_with_true_latents(50, cfg.training.device)
+            elif partion == "test" or partition == "val":
+                imgs, true_latents = data.create_weak_vae_batch_with_true_latents(5, cfg.training.device)
+            m = int(imgs.shape[2]/2) # 64
+            x0 = imgs[:, :, :m, :]
+            x1 = imgs[:, :, m:, :]
+            true_z0 = true_latents[:, :6]
+            true_z1 = true_latents[:, 6:]
+
+            x0, x1 = x0.to(device), x1.to(device)
+            true_z0, true_z1 = true_z0.to(device), true_z1.to(device)
+
+            _, _, z0, z1, *_ = model.encode_decode_pair(x0, x1)
+
+            z0s.append(z0)
+            z1s.append(z1)
+            true_z0s.append(true_z0)
+            true_z1s.append(true_z1)
+
+        z0s = torch.cat(z0s, dim=0)
+        z1s = torch.cat(z1s, dim=0)
+        true_z0s = torch.cat(true_z0s, dim=0)
+        true_z1s = torch.cat(true_z1s, dim=0)
+
+        data = (
+            z0s,
+            z1s,
+            true_z0s,
+            true_z1s
+        )
+
+        filename = Path(cfg.general.exp_dir).resolve() / f"data/{partition}_encoded.pt"
+        print(f"Storing encoded {partition} data at {filename}")
+        torch.save(data, filename)
 
 
 if __name__ == "__main__":

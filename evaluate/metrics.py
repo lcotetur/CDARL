@@ -1,7 +1,9 @@
 import numpy as np
 import scipy
-from sklearn import metrics, ensemble
+import sklearn
+from sklearn import metrics
 from six.moves import range
+from sklearn.metrics import mean_squared_error
 
 """Unsupervised Metrics
 
@@ -101,20 +103,24 @@ def mutual_information_score(features):
     return np.sum(mutual_info_matrix) / (num_codes**2 - num_codes)
 
 def histogram_discretize(features, num_bins=20):
-    """Discretization based on histograms."""
+    """
+    Discretization based on histograms.
+    """
     discretized = np.zeros_like(features)
     for i in range(features.shape[0]):
         discretized[i, :] = np.digitize(features[i, :], np.histogram(features[i, :], num_bins)[1][:-1])
     return discretized
 
 def discrete_mutual_info(mus, ys):
-    """Compute discrete mutual information."""
+    """
+    Compute discrete mutual information.
+    """
     num_codes = mus.shape[0]
     num_factors = ys.shape[0]
     m = np.zeros([num_codes, num_factors])
     for i in range(num_codes):
         for j in range(num_factors):
-            m[i, j] = metrics.mutual_info_score(ys[j, :], mus[i, :])
+            m[i, j] = sklearn.metrics.mutual_info_score(ys[j, :], mus[i, :])
     return m
 
 
@@ -126,7 +132,7 @@ Based on "Isolating Sources of Disentanglement in Variational Autoencoders"
 (https://arxiv.org/pdf/1802.04942.pdf).
 """
 
-def compute_mig(ground_truth_data, model, num_train, batch_size=16):
+def compute_mig(ground_truth_data, model, num_train=10000, batch_size=16):
     """Computes the mutual information gap.
 
     Args:
@@ -154,12 +160,15 @@ def _compute_mig(mus_train, ys_train):
     return score_dict
 
 def discrete_entropy(ys):
-    """Compute discrete mutual information."""
+    """
+    Compute discrete mutual information.
+    """
     num_factors = ys.shape[0]
     h = np.zeros(num_factors)
     for j in range(num_factors):
-        h[j] = metrics.mutual_info_score(ys[j, :], ys[j, :])
+        h[j] = sklearn.metrics.mutual_info_score(ys[j, :], ys[j, :])
     return h
+
 
 """Implementation of Disentanglement, Completeness and Informativeness.
 
@@ -167,7 +176,7 @@ Based on "A Framework for the Quantitative Evaluation of Disentangled
 Representations" (https://openreview.net/forum?id=By-7dz-AZ).
 """
 
-def compute_dci(ground_truth_data, model, num_train, num_test, batch_size=16):
+def compute_dci(ground_truth_data, model, num_train, num_test, batch_size=16, boost_mode="sklearn"):
     """Computes the DCI scores according to Sec 2.
 
     Args:
@@ -188,13 +197,13 @@ def compute_dci(ground_truth_data, model, num_train, num_test, batch_size=16):
     assert mus_train.shape[1] == num_train
     assert ys_train.shape[1] == num_train
     mus_test, ys_test = ground_truth_data.generate_batch_factor_code(model, num_test, batch_size)
-    scores = _compute_dci(mus_train, ys_train, mus_test, ys_test)
+    scores = _compute_dci(mus_train, ys_train, mus_test, ys_test, boost_mode)
     return scores
 
-def _compute_dci(mus_train, ys_train, mus_test, ys_test):
+def _compute_dci(mus_train, ys_train, mus_test, ys_test, boost_mode):
     """Computes score based on both training and testing codes and factors."""
     scores = {}
-    importance_matrix, train_err, test_err = compute_importance_gbt(mus_train, ys_train, mus_test, ys_test)
+    importance_matrix, train_err, test_err = compute_importance_gbt(mus_train, ys_train, mus_test, ys_test, boost_mode)
     assert importance_matrix.shape[0] == mus_train.shape[0]
     assert importance_matrix.shape[1] == ys_train.shape[0]
     scores["informativeness_train"] = train_err
@@ -203,47 +212,81 @@ def _compute_dci(mus_train, ys_train, mus_test, ys_test):
     scores["completeness"] = completeness(importance_matrix)
     return scores
 
-def compute_importance_gbt(x_train, y_train, x_test, y_test):
+def compute_importance_gbt(x_train, y_train, x_test, y_test, boost_mode="sklearn"):
     """Compute importance based on gradient boosted trees."""
     num_factors = y_train.shape[0]
     num_codes = x_train.shape[0]
-    importance_matrix = np.zeros(shape=[num_codes, num_factors], dtype=np.float64)
-    train_loss = []
-    test_loss = []
+    importance_matrix = np.zeros(shape=[num_codes, num_factors])
+
+    train_loss, test_loss  = [], []
     for i in range(num_factors):
-        model = ensemble.GradientBoostingClassifier()
+        if boost_mode == "sklearn":
+            from sklearn.ensemble import GradientBoostingClassifier
+
+            model = GradientBoostingClassifier()
+        elif boost_mode == "regressor":
+            from sklearn.ensemble import GradientBoostingRegressor
+
+            model = GradientBoostingRegressor()
+        elif boost_mode == "xgboost":
+            from xgboost import XGBClassifier
+
+            model = XGBClassifier()
+        elif boost_mode == "lightgbm":
+            from lightgbm import LGBMClassifier
+
+            model = LGBMClassifier()
+        else:
+            from sklearn.ensemble import GradientBoostingClassifier
+
+            model = GradientBoostingClassifier()
+
         model.fit(x_train.T, y_train[i, :])
+
         importance_matrix[:, i] = np.abs(model.feature_importances_)
-        train_loss.append(np.mean(model.predict(x_train.T) == y_train[i, :]))
-        test_loss.append(np.mean(model.predict(x_test.T) == y_test[i, :]))
+        if boost_mode == "regressor":
+            train_errors.append(mean_squared_error(model.predict(model_z_train), true_z_train[:, i]))
+            test_errors.append(mean_squared_error(model.predict(model_z_test), true_z_test[:, i]))
+        else:
+            train_loss.append(np.mean(model.predict(x_train.T) == y_train[i, :]))
+            test_loss.append(np.mean(model.predict(x_test.T) == y_test[i, :]))
     return importance_matrix, np.mean(train_loss), np.mean(test_loss)
 
+# noinspection PyUnresolvedReferences
+def disentanglement(importance_matrix, eps=1e-11):
+    """Computes the disentanglement score from an importance matrix"""
 
-def disentanglement_per_code(importance_matrix):
-    """Compute disentanglement score of each code."""
-    # importance_matrix is of shape [num_codes, num_factors].
-    return 1. - scipy.stats.entropy(importance_matrix.T + 1e-11, base=importance_matrix.shape[1])
+    disentanglement_per_code = _disentanglement_per_code(importance_matrix)
 
-
-def disentanglement(importance_matrix):
-    """Compute the disentanglement score of the representation."""
-    per_code = disentanglement_per_code(importance_matrix)
     if importance_matrix.sum() == 0.0:
         importance_matrix = np.ones_like(importance_matrix)
     code_importance = importance_matrix.sum(axis=1) / importance_matrix.sum()
-    return np.sum(per_code * code_importance)
 
+    disentanglement = np.sum(disentanglement_per_code * code_importance)
+    return disentanglement
 
-def completeness_per_factor(importance_matrix):
-    """Compute completeness of each factor."""
+def _disentanglement_per_code(importance_matrix):
+    """Compute disentanglement score of each code."""
     # importance_matrix is of shape [num_codes, num_factors].
-    return 1. - scipy.stats.entropy(importance_matrix + 1e-11, base=importance_matrix.shape[0])
+    return 1.0 - scipy.stats.entropy(importance_matrix.T + 1e-11, base=importance_matrix.shape[1])
 
+def completeness(importance_matrix, eps=1e-11):
+    """Computes the completeness score from an importance matrix"""
 
-def completeness(importance_matrix):
-    """"Compute completeness of the representation."""
-    per_factor = completeness_per_factor(importance_matrix)
-    if importance_matrix.sum() == 0.:
+    # noinspection PyUnresolvedReferences
+    completeness_per_factor = _completeness_per_factor(importance_matrix) 
+
+    if importance_matrix.sum() == 0.0:
         importance_matrix = np.ones_like(importance_matrix)
     factor_importance = importance_matrix.sum(axis=0) / importance_matrix.sum()
-    return np.sum(per_factor * factor_importance)
+
+    completeness = np.sum(completeness_per_factor * factor_importance)
+    return completeness
+
+def _completeness_per_factor(importance_matrix):
+    """Compute completeness of each factor."""
+    # importance_matrix is of shape [num_codes, num_factors].
+    return 1.0 - scipy.stats.entropy(importance_matrix + 1e-11, base=importance_matrix.shape[0])
+
+
+

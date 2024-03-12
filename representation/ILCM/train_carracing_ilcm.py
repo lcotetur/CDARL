@@ -18,6 +18,7 @@ import json
 from datetime import date
 import os
 import yaml
+from functools import lru_cache
 
 from CDARL.data.shapes3d_data import Shape3dDataset
 from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
@@ -38,13 +39,13 @@ from experiment_utils import (
     frequency_check,
 )
 from model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from model import GaussianEncoder, ImageEncoder, ImageDecoder, CoordConv2d
+from model import GaussianEncoder, ImageEncoder, ImageDecoder, CoordConv2d, Encoder3dshapes, Decoder3dshapes
 from training import VAEMetrics
 
 def create_model_reduce_dim(cfg):
     # Create model
     scm = create_img_scm()
-    encoder, decoder = create_img_encoder_decoder()
+    encoder, decoder = create_img_encoder_decoder(cfg)
     intervention_encoder = create_intervention_encoder(cfg)
     model = ILCM(
             scm,
@@ -70,42 +71,74 @@ def create_img_scm():
 
     return scm
 
-def create_img_encoder_decoder():
-    encoder = ImageEncoder(
-            in_resolution=64,
-            in_features=3,
-            out_features=32,
-            hidden_features=32,
-            batchnorm=False,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            min_std=1.e-3,
-            permutation=0,
-            )
-    decoder = ImageDecoder(
-            in_features=32,
-            out_resolution=64,
-            out_features=3,
-            hidden_features=32,
-            batchnorm=False,
-            min_std=1.0,
-            fix_std=True,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            permutation=0,
-            )
+def create_img_encoder_decoder(cfg):
+    if cfg.data.training.encoder == 'resnet':
+        encoder = ImageEncoder(
+                in_resolution=64,
+                in_features=3,
+                out_features=32,
+                hidden_features=32,
+                batchnorm=False,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                min_std=1.e-3,
+                permutation=0,
+                )
+        decoder = ImageDecoder(
+                in_features=32,
+                out_resolution=64,
+                out_features=3,
+                hidden_features=32,
+                batchnorm=False,
+                min_std=1.0,
+                fix_std=True,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                permutation=0,
+                )
+    elif cfg.data.training.encoder == 'conv':
+        encoder = Encoder3dshapes(
+                in_resolution=64,
+                in_features=3,
+                out_features=32,
+                hidden_features=32,
+                batchnorm=False,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                min_std=1.e-3,
+                permutation=0,
+                )
+        decoder = Decoder3dshapes(
+                in_features=32,
+                out_resolution=64,
+                out_features=3,
+                hidden_features=32,
+                batchnorm=False,
+                min_std=1.0,
+                fix_std=True,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                permutation=0,
+                )
+        
     return encoder, decoder
 
 @hydra.main(version_base=None, config_path="config", config_name="ilcm")
 def main(cfg):
     """High-level experiment function"""
-    log_dir = os.path.join(cfg.data.save_path, str(date.today()))
+    log_dir = os.path.join(cfg.data.save_path, str(date.today()) + '_ilcm')
     os.makedirs(log_dir, exist_ok=True)
 
     # save config
@@ -222,9 +255,12 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
     optim, scheduler = create_optimizer_and_scheduler(cfg, model, separate_param_groups=True)
 
     train_metrics = defaultdict(list)
+    val_metrics = defaultdict(list)
     best_state = {"state_dict": None, "loss": None, "step": None}
 
-    data = get_dataloader(cfg, batchsize=cfg.data.training.batchsize, shuffle=True)
+    transform = transforms.Compose([transforms.ToTensor()])
+    dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+    loader = get_dataloader(cfg, dataset)
     steps_per_epoch = 1
 
     # GPU
@@ -233,19 +269,27 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
 
     step = 0
     nan_counter = 0
-    epoch_generator = trange(cfg.data.training.epochs, disable=not cfg.general.verbose)
+    epoch_generator = trange(cfg.training.epochs, disable=not cfg.general.verbose)
 
     for epoch in epoch_generator:
+
+        # Graph sampling settings
+        graph_kwargs = determine_graph_learning_settings(cfg, epoch, model)
+
+        model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
+            cfg, model, model_reduce_dim, epoch, optim
+        )
+
         for i_split in range(cfg.data.num_splitted):
-            for i_batch, imgs in enumerate(data):
+            for i_batch, imgs in enumerate(loader):
 
-                # Graph sampling settings
-                graph_kwargs = determine_graph_learning_settings(cfg, epoch, model)
-
+                m_epoch = step/1000
                 # Epoch-based schedules
-                model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
-                    cfg, model, epoch, optim
-                )
+                if m_epoch % 10 == 0 and m_epoch != 0:
+                    print('epoch_schedule', m_epoch)
+                    model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
+                        cfg, model, model_reduce_dim, m_epoch, optim
+                        )
 
                 fractional_epoch = step / steps_per_epoch
 
@@ -296,32 +340,38 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                     )
 
                 # Optimizer step
-                finite, grad_norm = optimizer_step(cfg, loss, model, model_outputs, optim, x1, x2)
+                finite, grad_norm = optimizer_step(cfg, loss, model, model_outputs, optim, z1, z2)
                 if not finite:
                     nan_counter += 1
 
+                # Validation loop
+                #if frequency_check(step, cfg.training.validate_every_n_steps):
+                    #validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device)
+
                 # Log loss and metrics
                 step += 1
-                results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
-                results.save_logs(cfg.data.save_path, str(date.today()))
                 #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
 
                 # Save model checkpoint
-                if frequency_check(step, cfg.training.save_model_every_n_steps):
+                if frequency_check(step, cfg.data.training.save_model_every_n_steps):
                     save_model(log_dir, model, f"model_step_{step}.pt")
-                    imgs1 = x1
-                    with torch.no_grad():
-                        recon1 = model_reduce_dim.encode_decode(imgs1)
-                    saved_imgs = torch.cat([imgs1, recon1], dim=0)
+                    #imgs1 = x1
+                    #with torch.no_grad():
+                        #recon1 = model_reduce_dim.encode_decode(imgs1)
+                    #saved_imgs = torch.cat([imgs1, recon1], dim=0)
                     # save images
-                    path_image = os.path.join(log_dir, f'recon_{step}.png')
-                    save_image(saved_imgs, path_image, nrow=10)
+                    #path_image = os.path.join(log_dir, f'recon_{step}.png')
+                    #save_image(saved_imgs, path_image, nrow=10)
+                    results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
+                    results.save_logs(log_dir)
                     results.generate_plot(log_dir,log_dir)
                     # save metrics
+                    update_dict(train_metrics, metrics)
                     with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
-                        json.dump(metrics, f)
+                        json.dump(train_metrics, f)
 
-            # LR scheduler
+            updateloader(cfg, loader, dataset)
+
         if scheduler is not None and epoch < cfg.data.training.epochs - 1:
             scheduler.step()
 
@@ -334,46 +384,69 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                 logger.info(f"Resetting optimizer at epoch {epoch + 1}")
                 reset_optimizer_state(optim)
 
+        # noinspection PyTypeChecker
+        if cfg.training.early_stopping and best_state["step"] < step:
+            logger.info(
+                f'Early stopping after step {best_state["step"]} '
+                f'with validation loss {best_state["loss"]}'
+            )
+            model.load_state_dict(best_state["state_dict"])
+
     # Reset model: back to CPU, reset manifold thickness
     set_manifold_thickness(cfg, model, None)
 
     return train_metrics
 
 
-def get_dataloader(cfg, batchsize=32, shuffle=False, include_noise_encodings=False):
+def get_dataloader(cfg, dataset):
     """Load data from disk and return DataLoader instance"""
     logger.debug(f"Loading data {cfg.data.name}")
-    transform = transforms.Compose([transforms.ToTensor()])
-    dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
     loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.data.num_workers)
     logger.debug(f"Finished loading data {cfg.data.name}")
     return loader
 
-def updateloader(loader, dataset):
+def updateloader(cfg, loader, dataset):
     dataset.loadnext()
     loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
     return loader
 
 def encode_data(cfg, imgs, model_reduce_dim, device):
+    #style
+    """
+    imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)              
     imgs = imgs.reshape(-1, *imgs.shape[2:])
-    imgs_repeat = imgs.repeat(2, 1, 1, 1)
-    if cfg.data.training.random_augmentations:
-        imgs = RandomTransform(imgs_repeat).apply_transformations(nb_class=2, value=0.3, random_crop=False)
-        x1 = imgs[0]
-        x2 = imgs[1]
+    imgs = imgs.repeat(2, 1, 1, 1)
+
+    if cfg.data.training.random_augmentations == True:
+        imgs = RandomTransform(imgs).apply_random_transformations(nb_class=2)
     else:
-        imgs = imgs_repeat # torch.Size([30, 3, 64, 64])
-        m = int(imgs.shape[0]/2)
-        x1 = imgs[:m, :, :, :]
-        x2 = imgs[m:, :, :, :]
-            
+        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+
+    x1 = imgs[0]
+    x2 = imgs[1]
+    """
+
+    #content
+    imgs = imgs.to(device, non_blocking=True)
+    imgs = imgs.reshape(-1, *imgs.shape[2:])
+    imgs = imgs.repeat(2, 1, 1, 1)
+
+    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+    imgs = imgs.permute(1,0,2,3,4)
+    m = int(imgs.shape[0]/2)
+    feature_1 = imgs[:m]
+    x1 = feature_1.reshape(-1, *imgs.shape[2:])
+    feature_2 = imgs[m:]
+    x2 = feature_2.reshape(-1, *imgs.shape[2:])
+    
     x1, x2 = (x1.to(device), x2.to(device))
     with torch.no_grad():
         _, _, z1, z2, *_ = model_reduce_dim.encode_decode_pair(x1, x2)
     return x1, x2, z1, z2
 
-def epoch_schedules(cfg, model, epoch, optim):
+def epoch_schedules(cfg, model, model_reduce_dim, epoch, optim):
     """Epoch-based schedulers"""
+
     # Pretraining?
     pretrain = cfg.training.pretrain_epochs is not None and epoch < cfg.training.pretrain_epochs
     if epoch == cfg.training.pretrain_epochs:
@@ -394,15 +467,289 @@ def epoch_schedules(cfg, model, epoch, optim):
         # model.encoder.freeze()
         # model.decoder.freeze()
 
+    # Fix noise-centric model to a topological order encoder?
+    if (
+        "fix_topological_order_epoch" in cfg.training
+        and cfg.training.fix_topological_order_epoch is not None
+        and epoch == cfg.training.fix_topological_order_epoch
+    ):
+        logger.info(f"Determining topological order at epoch {epoch}")
+        fix_topological_order(cfg, model, model_reduce_dim, partition="val")
+
     # Deterministic intervention encoders?
     if cfg.training.deterministic_intervention_encoder_after_epoch is None:
         deterministic_intervention_encoder = False
     else:
-        deterministic_intervention_encoder = (epoch >= cfg.training.deterministic_intervention_encoder_after_epoch)
+        deterministic_intervention_encoder = (
+            epoch >= cfg.training.deterministic_intervention_encoder_after_epoch
+        )
     if epoch == cfg.training.deterministic_intervention_encoder_after_epoch:
         logger.info(f"Switching to deterministic intervention encoder at epoch {epoch}")
 
     return model_interventions, pretrain, deterministic_intervention_encoder
+
+
+@torch.no_grad()
+def fix_topological_order(cfg, model, model_reduce_dim, partition="val", dataloader=None):
+    """Fixes the topological order in an ILCM"""
+
+    # This is only defined for noise-centric models (ILCMs)
+    assert cfg.model.type == "intervention_noise_vae"
+
+    model.eval()
+    device = torch.device(cfg.training.device)
+    cpu = torch.device("cpu")
+    model.to(device)
+
+    if dataloader is None:
+        transform = transforms.Compose([transforms.ToTensor()])
+        dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+        loader = get_dataloader(cfg, dataset)
+
+    # Load data and compute noise encodings
+    noise = []
+    for i_split in range(cfg.data.num_splitted):
+        for i_batch, imgs in enumerate(loader):
+            _, _, z, _ = encode_data(cfg, imgs, model_reduce_dim, device)
+            batch = z.to(device)
+            noise.append(model.encode_to_noise(batch, deterministic=True).to(cpu))
+        loader = updateloader(cfg, loader, dataset)
+
+    noise = torch.cat(noise, dim=0).detach()
+
+    # Median values of each noise component (to be used as dummy values when masking)
+    dummy_values = torch.median(noise, dim=0).values
+    logger.info(f"Dummy noise encodings: {dummy_values}")
+
+    # Find topological order
+    model = model.to(cpu)
+    topological_order = find_topological_order(model, noise)
+    logger.info(f"Topological order: {topological_order}")
+
+    # Fix topological order
+    model.scm.set_causal_structure(
+        None, "fixed_order", topological_order=topological_order, mask_values=dummy_values
+    )
+    model.to(device)
+
+def find_topological_order(model, noise):
+    """
+    Extracts the topological order from a noise-centric model by iteratively looking for the
+    least-dependant solution function
+    """
+
+    @lru_cache()
+    def solution_dependance_on_noise(i, j):
+        """Tests how strongly solution s_i depends on noise variable e_j"""
+
+        transform = model.scm.solution_functions[i]
+        inputs = noise[:, i].unsqueeze(1)
+
+        mask_ = torch.ones_like(noise)
+        mask_[:, i] = 0
+        context = mask(noise, mask_)
+
+        # Note that we need to invert here b/c the transform is defined from z to e
+        return dependance(transform, inputs, context, j, invert=True)
+
+    topological_order = []
+    components = set(range(model.dim_z))
+
+    while components:
+        least_dependant_solution = None
+        least_dependant_score = float("inf")
+
+        # For each variable, check how strongly its solution function depends on the other noise
+        # vars
+        for i in components:
+            others = [j for j in components if j != i]
+            score = sum(solution_dependance_on_noise(i, j) for j in others)
+
+            if score < least_dependant_score:
+                least_dependant_solution = i
+                least_dependant_score = score
+
+        # The "least dependant" variable will the be next in our topological order, then we remove
+        # it and consider only the remaining vars
+        topological_order.append(least_dependant_solution)
+        components.remove(least_dependant_solution)
+
+    return topological_order
+
+
+def dependance(
+    transform,
+    inputs,
+    context,
+    component,
+    invert=False,
+    measure=torch.nn.functional.mse_loss,
+    normalize=True,
+    **kwargs,
+):
+    """
+    Computes a measure of functional dependence of a transform on a given component of the context
+    """
+
+    # Shuffle the component of the context
+    context_shuffled = context.clone()
+    batchsize = context.shape[0]
+    idx = torch.randperm(batchsize)
+    context_shuffled[:, component] = context_shuffled[idx, component]
+
+    # Compute function with and without permutation
+    function = transform.inverse if invert else transform
+    f, _ = function(inputs, context=context, **kwargs)
+    f_shuffled, _ = function(inputs, context=context_shuffled, **kwargs)
+
+    # Normalize so that this becomes comparable
+    if normalize:
+        mean, std = torch.mean(f), torch.std(f)
+        std = torch.clamp(std, 0.1)
+        f = (f - mean) / std
+        f_shuffled = (f_shuffled - mean) / std
+
+    # Compute difference
+    difference = measure(f, f_shuffled)
+
+    return difference
+
+def mask(data, mask_, mask_data=None, concat_mask=True):
+    """Masking on a tensor, optionally adding the mask to the data"""
+
+    if mask_data is None:
+        masked_data = mask_ * data
+    else:
+        masked_data = mask_ * data + (1 - mask_) * mask_data
+
+    if concat_mask:
+        masked_data = torch.cat((masked_data, mask_), dim=1)
+
+    return masked_data
+
+def solution_dependance_on_noise(model, i, j, noise):
+    """Tests whether solution s_i depends on noise variable e_j"""
+
+    transform = model.scm.solution_functions[i]
+    inputs = noise[:, i].unsqueeze(1)
+
+    mask_ = torch.ones_like(noise)
+    mask_[:, i] = 0
+    context = mask(noise, mask_)
+
+    # Note that we need to invert here b/c the transform is defined from z to e
+    return dependance(transform, inputs, context, j, invert=True)
+
+@torch.no_grad()
+def validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device):
+    """Validation loop, computing a number of metrics and checkpointing the best model"""
+
+    x1, x2, z1, z2 = encode_data(cfg, imgs, model_reduce_dim, device)
+
+    return eval_implicit_graph(cfg, model, model_reduce_dim, dataloader=imgs)
+
+
+
+@torch.no_grad()
+def eval_implicit_graph(cfg, model, model_reduce_dim, partition="val", dataloader=None):
+    """Evaluates implicit graph"""
+
+    # This is only defined for noise-centric models (ILCMs)
+    if cfg.model.type not in ["intervention_noise_vae", "alt_intervention_noise_vae"]:
+        return {}
+
+    # Let's skip this for large latent spaces
+    if cfg.model.dim_z > 7:
+        return {}
+
+    model.eval()
+    device = torch.device(cfg.training.device)
+    cpu = torch.device("cpu")
+
+    # Dataloader
+    if dataloader is None:
+        dataloader = get_dataloader(cfg)
+
+    # Load data and compute noise encodings
+    noise = []
+    _, _, z1, z2 = encode_data(cfg, dataloader, model_reduce_dim, device)
+    x_batch = z1.to(device)
+    noise.append(model.encode_to_noise(x_batch, deterministic=True).to(cpu))
+
+    noise = torch.cat(noise, dim=0).detach()
+
+    # Evaluate causal strength
+    model = model.to(cpu)
+    causal_effects, topological_order = compute_implicit_causal_effects(model, noise)
+
+    # Package as dict
+    results = {
+        f"implicit_graph_{i}_{j}": causal_effects[i, j].item()
+        for i in range(model.dim_z)
+        for j in range(model.dim_z)
+    }
+    print('implicit graph results: ', results)
+
+    model.to(device)
+
+    return results
+
+
+def eval_enco_graph(cfg, model, model_reduce_dim, partition="train"):
+    """Post-hoc graph evaluation with ENCO"""
+
+    # Only want to do this for ILCMs
+    if cfg.model.type not in ["intervention_noise_vae", "alt_intervention_noise_vae"]:
+        return {}
+
+    # Let's skip this for large latent spaces
+    if cfg.model.dim_z > 7:
+        return {}
+
+    logger.info("Evaluating learned graph with ENCO")
+
+    model.eval()
+    device = torch.device(cfg.training.device)
+    cpu = torch.device("cpu")
+    model.to(device)
+
+    # Load data and compute causal variables
+    dataloader = get_dataloader(cfg)
+    z0s, z1s, interventions = [], [], []
+
+    with torch.no_grad():
+        _, _, x0, x1 = encode_data(cfg, dataloader, model_reduce_dim, device)
+        x0, x1 = x0.to(device), x1.to(device)
+        _, _, _, _, e0, e1, _, _, intervention = model.encode_decode_pair(
+                x0.to(device), x1.to(device)
+            )
+        z0 = model.scm.noise_to_causal(e0)
+        z1 = model.scm.noise_to_causal(e1)
+
+        z0s.append(z0.to(cpu))
+        z1s.append(z1.to(cpu))
+        interventions.append(intervention.to(cpu))
+
+        z0s = torch.cat(z0s, dim=0).detach()
+        z1s = torch.cat(z1s, dim=0).detach()
+        interventions = torch.cat(interventions, dim=0).detach()
+
+    # Run ENCO
+    adjacency_matrix = (
+        run_enco(z0s, z1s, interventions, lambda_sparse=cfg.eval.enco_lambda, device=device)
+        .cpu()
+        .detach()
+    )
+
+    # Package as dict
+    results = {
+        f"enco_graph_{i}_{j}": adjacency_matrix[i, j].item()
+        for i in range(model.dim_z)
+        for j in range(model.dim_z)
+    }
+    print('Enco results: ', results)
+
+    return results
 
 
 if __name__ == "__main__":

@@ -8,15 +8,22 @@
 echo "Date:     $(date)"
 echo "Hostname: $(hostname)"
 
+sbatch --gres=gpu:1 -c 4 --mem=32G -t 32:00:00 --partition=unkillable --constraint=turing train_agents.sh
+sbatch --gres=gpu:1 -c 4 --mem=32G -t 24:00:00 --partition=unkillable --constraint=turing evaluate_agents.sh
+sbatch --gres=gpu:1 -c 4 --mem=32G -t 32:00:00 --partition=unkillable --constraint=turing train_carla_repr.sh
+sbatch --gres=gpu:1 -c 4 --mem=32G -t 240:00:00 --partition=long --constraint=turing train_carracing_repr.sh
+sbatch --gres=gpu:2 -c 4 --mem=32G -t 120:00:00 --partition=main --constraint=turing train_3dshapes.sh
+
 # LUSR CONDA ENV
-salloc --gres=gpu:1 -c 4 --mem=32G -t 30:00:00 --partition=unkillable --constraint=turing
+salloc --gres=gpu:1 -c 4 --mem=32G -t 32:00:00 --partition=unkillable --constraint=turing
 
 module load anaconda/3 
 
-module load singularity
+#module load singularity
 
 conda activate LUSR
 
+# canvas display
 export PYTHONPATH="${PYTHONPATH}:`pwd`"
 Xvfb :1 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &> xvfb.log & export DISPLAY=:1
 

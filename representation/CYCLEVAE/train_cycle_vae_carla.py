@@ -29,20 +29,14 @@ parser.add_argument('--save-freq', default=19000, type=int)
 parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
 parser.add_argument('--class-latent-size', default=8, type=int)
-parser.add_argument('--content-latent-size', default=32, type=int)
+parser.add_argument('--content-latent-size', default=16, type=int)
 parser.add_argument('--flatten-size', default=9216, type=int)
-parser.add_argument('--random-augmentations', default=True, type=bool)
+parser.add_argument('--random-augmentations', default=False, type=bool)
 parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
 parser.add_argument('--verbose', default=True, type=bool)
 args = parser.parse_args()
 
 Model = CarlaDisentangledVAE
-
-
-def updateloader(loader, dataset):
-    dataset.loadnext()
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    return loader
 
 def main():
     seed_everything(args.seed)

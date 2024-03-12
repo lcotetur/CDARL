@@ -15,6 +15,14 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 logging_initialized = False
 
+def get_first_batch(dataloader):
+    """Returns the first batch from a PyTorch DataLoader"""
+
+    for data in dataloader:
+        return data
+
+    raise RuntimeError("Cannot get first batch from DataLoader")
+
 # noinspection PyUnresolvedReferences
 def initialize_experiment(cfg):
     """Initialize experiment folder (and plenty of other initialization thingies)"""
@@ -160,7 +168,7 @@ def save_model(log_dir, model, filename="model.pt"):
     torch.save(model.state_dict(), path)
 
 
-def compute_metrics_on_dataset(cfg, model, criteria, data_loader, device):
+def compute_metrics_on_dataset(cfg, model, criteria, inputs, device):
     """Computes metrics on a full dataset"""
     # At test time, always use the canonical manifold thickness
     model.eval()
@@ -172,18 +180,16 @@ def compute_metrics_on_dataset(cfg, model, criteria, data_loader, device):
     batches = 0
 
     # Loop over batches
-    for x1, x2, z1, z2, intervention_labels, true_interventions, *_ in data_loader:
-        batches += 1
+    x1, x2, z1, z2 = inputs
+    batches += 1
 
-        x1, x2, z1, z2, intervention_labels, true_interventions = (
+    x1, x2, z1, z2 = (
             x1.to(device),
             x2.to(device),
             z1.to(device),
-            z2.to(device),
-            intervention_labels.to(device),
-            true_interventions.to(device),
+            z2.to(device)
         )
-        log_prob, model_outputs = model(
+    log_prob, model_outputs = model(
             x1,
             x2,
             beta=cfg.eval.beta,
@@ -194,14 +200,10 @@ def compute_metrics_on_dataset(cfg, model, criteria, data_loader, device):
             graph_samples=cfg.eval.graph_sampling.samples,
         )
 
-        batch_loss, batch_metrics = criteria(
-            log_prob,
-            true_interventions=true_interventions,
-            true_intervention_labels=intervention_labels,
-            **model_outputs,
-        )
-        batch_log_likelihood = torch.mean(
-            model.log_likelihood(
+    batch_loss, batch_metrics = criteria(log_prob, **model_outputs,)
+        
+    batch_log_likelihood = torch.mean(
+        model.log_likelihood(
                 x1,
                 x2,
                 n_latent_samples=cfg.training.iwae_samples,
@@ -212,16 +214,16 @@ def compute_metrics_on_dataset(cfg, model, criteria, data_loader, device):
                 graph_temperature=cfg.eval.graph_sampling.temperature,
                 graph_samples=cfg.eval.graph_sampling.samples,
             )
-        ).item()
+    ).item()
 
-        # Tally up metrics
-        loss += batch_loss
-        if metrics is None:
-            metrics = batch_metrics
-        else:
-            for key, val in metrics.items():
-                metrics[key] += batch_metrics[key]
-        nll -= batch_log_likelihood
+    # Tally up metrics
+    loss += batch_loss
+    if metrics is None:
+        metrics = batch_metrics
+    else:
+        for key, val in metrics.items():
+            metrics[key] += batch_metrics[key]
+    nll -= batch_log_likelihood
 
     # Average over batches
     loss /= batches

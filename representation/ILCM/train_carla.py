@@ -38,10 +38,10 @@ from experiment_utils import (
     frequency_check,
 )
 from model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from model import ImageEncoder, ImageDecoder, CoordConv2d
+from model import ImageEncoderCarla, ImageDecoderCarla, BasicEncoderCarla, BasicDecoderCarla, CoordConv2d
 from training import VAEMetrics
 
-@hydra.main(version_base=None, config_path="config", config_name="ilcm")
+@hydra.main(version_base=None, config_path="config", config_name="reduce_dim_ilcm")
 def main(cfg):
     """High-level experiment function"""
     log_dir = os.path.join(cfg.data.save_path, str(date.today()) + f'_{cfg.general.seed}')
@@ -106,36 +106,66 @@ def create_scm(cfg):
 def create_encoder_decoder(cfg):
     """Create encoder and decoder"""
     logger.info(f"Creating {cfg.model.encoder.type} encoder / decoder")
-
-    encoder = ImageEncoder(
-            in_resolution=cfg.model.dim_x[2],
-            in_features=cfg.model.dim_x[0],
-            out_features=cfg.model.dim_z,
-            hidden_features=cfg.model.encoder.hidden_channels,
-            batchnorm=cfg.model.encoder.batchnorm,
-            conv_class=CoordConv2d if cfg.model.encoder.coordinate_embeddings else torch.nn.Conv2d,
-            mlp_layers=cfg.model.encoder.extra_mlp_layers,
-            mlp_hidden=cfg.model.encoder.extra_mlp_hidden_units,
-            elementwise_hidden=cfg.model.encoder.elementwise_hidden_units,
-            elementwise_layers=cfg.model.encoder.elementwise_layers,
-            min_std=cfg.model.encoder.min_std,
-            permutation=cfg.model.encoder.permutation,
-            )
-    decoder = ImageDecoder(
-            in_features=cfg.model.dim_z,
-            out_resolution=cfg.model.dim_x[2],
-            out_features=cfg.model.dim_x[0],
-            hidden_features=cfg.model.decoder.hidden_channels,
-            batchnorm=cfg.model.decoder.batchnorm,
-            min_std=cfg.model.decoder.min_std,
-            fix_std=cfg.model.decoder.fix_std,
-            conv_class=CoordConv2d if cfg.model.decoder.coordinate_embeddings else torch.nn.Conv2d,
-            mlp_layers=cfg.model.decoder.extra_mlp_layers,
-            mlp_hidden=cfg.model.decoder.extra_mlp_hidden_units,
-            elementwise_hidden=cfg.model.decoder.elementwise_hidden_units,
-            elementwise_layers=cfg.model.decoder.elementwise_layers,
-            permutation=cfg.model.encoder.permutation,
-            )
+    if cfg.data.training.encoder == 'resnet':
+        encoder = ImageEncoderCarla(
+                in_resolution= 128, #cfg.model.dim_x[2],
+                in_features=3, #cfg.model.dim_x[0],
+                out_features=cfg.model.dim_z,
+                hidden_features=cfg.model.encoder.hidden_channels,
+                batchnorm=cfg.model.encoder.batchnorm,
+                conv_class=CoordConv2d if cfg.model.encoder.coordinate_embeddings else torch.nn.Conv2d,
+                mlp_layers=cfg.model.encoder.extra_mlp_layers,
+                mlp_hidden=cfg.model.encoder.extra_mlp_hidden_units,
+                elementwise_hidden=cfg.model.encoder.elementwise_hidden_units,
+                elementwise_layers=cfg.model.encoder.elementwise_layers,
+                min_std=cfg.model.encoder.min_std,
+                permutation=cfg.model.encoder.permutation,
+                )
+        decoder = ImageDecoderCarla(
+                in_features=cfg.model.dim_z,
+                out_resolution=128, #cfg.model.dim_x[2],
+                out_features=3, #cfg.model.dim_x[0],
+                hidden_features=cfg.model.decoder.hidden_channels,
+                batchnorm=cfg.model.decoder.batchnorm,
+                min_std=cfg.model.decoder.min_std,
+                fix_std=cfg.model.decoder.fix_std,
+                conv_class=CoordConv2d if cfg.model.decoder.coordinate_embeddings else torch.nn.Conv2d,
+                mlp_layers=cfg.model.decoder.extra_mlp_layers,
+                mlp_hidden=cfg.model.decoder.extra_mlp_hidden_units,
+                elementwise_hidden=cfg.model.decoder.elementwise_hidden_units,
+                elementwise_layers=cfg.model.decoder.elementwise_layers,
+                permutation=cfg.model.encoder.permutation,
+                )
+    elif cfg.data.training.encoder == 'conv':
+        encoder = BasicEncoderCarla(
+                in_resolution= 128, #cfg.model.dim_x[2],
+                in_features=3, #cfg.model.dim_x[0],
+                out_features=cfg.model.dim_z,
+                hidden_features=cfg.model.encoder.hidden_channels,
+                batchnorm=cfg.model.encoder.batchnorm,
+                conv_class=CoordConv2d if cfg.model.encoder.coordinate_embeddings else torch.nn.Conv2d,
+                mlp_layers=cfg.model.encoder.extra_mlp_layers,
+                mlp_hidden=cfg.model.encoder.extra_mlp_hidden_units,
+                elementwise_hidden=cfg.model.encoder.elementwise_hidden_units,
+                elementwise_layers=cfg.model.encoder.elementwise_layers,
+                min_std=cfg.model.encoder.min_std,
+                permutation=cfg.model.encoder.permutation,
+                )
+        decoder = BasicDecoderCarla(
+                in_features=cfg.model.dim_z,
+                out_resolution=128, #cfg.model.dim_x[2],
+                out_features=3, #cfg.model.dim_x[0],
+                hidden_features=cfg.model.decoder.hidden_channels,
+                batchnorm=cfg.model.decoder.batchnorm,
+                min_std=cfg.model.decoder.min_std,
+                fix_std=cfg.model.decoder.fix_std,
+                conv_class=CoordConv2d if cfg.model.decoder.coordinate_embeddings else torch.nn.Conv2d,
+                mlp_layers=cfg.model.decoder.extra_mlp_layers,
+                mlp_hidden=cfg.model.decoder.extra_mlp_hidden_units,
+                elementwise_hidden=cfg.model.decoder.elementwise_hidden_units,
+                elementwise_layers=cfg.model.decoder.elementwise_layers,
+                permutation=cfg.model.encoder.permutation,
+                )
 
     if encoder.permutation is not None:
         logger.info(f"Encoder permutation: {encoder.permutation.detach().numpy()}")
@@ -167,8 +197,10 @@ def train(cfg, model, results, log_dir):
     train_metrics = defaultdict(list)
     best_state = {"state_dict": None, "loss": None, "step": None}
 
-    data = get_dataloader(cfg, batchsize=cfg.data.training.batchsize, shuffle=True)
-    steps_per_epoch = 1
+    transform = transforms.Compose([transforms.ToTensor()])
+    dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+    loader = get_dataloader(cfg, dataset)
+    steps_per_epoch = len(loader)
 
     # GPU
     model = model.to(device)
@@ -178,32 +210,51 @@ def train(cfg, model, results, log_dir):
     epoch_generator = trange(cfg.data.training.epochs, disable=not cfg.general.verbose)
 
     for epoch in epoch_generator:
-        for i_split in range(cfg.data.num_splitted):
-            for i_batch, imgs in enumerate(data):
+        # Graph sampling settings
+        graph_kwargs = determine_graph_learning_settings(cfg, epoch, model)
 
-                # Graph sampling settings
-                graph_kwargs = determine_graph_learning_settings(cfg, epoch, model)
-
-                # Epoch-based schedules
-                model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
-                    cfg, model, epoch, optim
+        # Epoch-based schedules
+        model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
+                cfg, model, epoch, optim
                 )
+
+        for i_split in range(cfg.data.num_splitted):
+            for i_batch, imgs in enumerate(loader):
+
 
                 fractional_epoch = step / steps_per_epoch
 
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs_repeat = imgs.repeat(2, 1, 1, 1)
-                if cfg.data.training.random_augmentations:
-                    imgs = RandomTransform(imgs_repeat).apply_transformations(nb_class=2, value=0.3, random_crop=False)
-                    x1 = imgs[0]
-                    x2 = imgs[1]
-                else:
-                    imgs = imgs_repeat # torch.Size([30, 3, 64, 64])
-                    m = int(imgs.shape[0]/2)
-                    x1 = imgs[:m, :, :, :]
-                    print(x1.shape)
-                    x2 = imgs[m:, :, :, :]
-            
+                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
+                
+                # Content
+                imgs_content = imgs.permute(1,0,2,3,4).repeat(2, 1, 1, 1, 1)
+                m = int(imgs_content.shape[0]/2)
+                imgs_content1 = imgs_content[:m, :, :, :, :]
+                imgs_content2 = imgs_content[:m, :, :, :, :]
+                imgs_content1 = imgs_content1[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]].view(imgs_content1.size())
+                imgs_content2 = imgs_content2[[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]].view(imgs_content2.size())
+
+                imgs_content1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
+                imgs_content2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
+
+                # Style
+                '''
+                imgs_style = imgs.repeat(2, 1, 1, 1, 1)
+                n = int(imgs_style.shape[0]/2)
+                imgs_style1 = imgs_style[:n, :, :, :, :]
+                imgs_style2 = imgs_style[n:, :, :, :, :]
+                idx = torch.randperm(3)
+                imgs_style1 = imgs_style1[idx].view(imgs_style1.size())
+                imgs_style1= imgs_style1.reshape(-1, *imgs_style1.shape[2:])
+                imgs_style2= imgs_style2.reshape(-1, *imgs_style2.shape[2:])
+
+                x1 = torch.cat((imgs_style1, imgs_content1), dim=0)
+                x2 = torch.cat((imgs_style2, imgs_content2), dim=0)
+                '''
+
+                x1 = imgs_content1
+                x2 = imgs_content2
+                save_image(torch.cat((x1, x2), dim=0), os.path.join(log_dir,'features.png'), nrow=10)
 
                 model.train()
 
@@ -256,8 +307,6 @@ def train(cfg, model, results, log_dir):
 
                 # Log loss and metrics
                 step += 1
-                results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
-                results.save_logs(cfg.data.save_path, str(date.today()))
                 #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
 
                 # Save model checkpoint
@@ -270,10 +319,14 @@ def train(cfg, model, results, log_dir):
                     # save images
                     path_image = os.path.join(log_dir, f'recon_{step}.png')
                     save_image(saved_imgs, path_image, nrow=10)
-                    results.generate_plot(log_dir,log_dir)
+
+                    results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
+                    results.save_logs(log_dir)
                     # save metrics
                     with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
                         json.dump(metrics, f)
+
+            updateloader(cfg, loader, dataset)
 
         # LR scheduler
         if scheduler is not None and epoch < cfg.data.training.epochs - 1:
@@ -294,18 +347,16 @@ def train(cfg, model, results, log_dir):
     return train_metrics
 
 
-def get_dataloader(cfg, batchsize=32, shuffle=False, include_noise_encodings=False):
+def get_dataloader(cfg, dataset):
     """Load data from disk and return DataLoader instance"""
     logger.debug(f"Loading data {cfg.data.name}")
-    transform = transforms.Compose([transforms.ToTensor()])
-    dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
-    loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
+    loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=cfg.data.training.shuffle, num_workers=4) #cfg.data.training.batchsize
     logger.debug(f"Finished loading data {cfg.data.name}")
     return loader
 
-def updateloader(loader, dataset):
+def updateloader(cfg, loader, dataset):
     dataset.loadnext()
-    loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
+    loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=cfg.data.training.shuffle, num_workers=4)
     return loader
 
 def epoch_schedules(cfg, model, epoch, optim):

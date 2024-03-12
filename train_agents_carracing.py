@@ -19,16 +19,17 @@ from CDARL.representation.VAE.vae import Encoder
 from CDARL.representation.CYCLEVAE.cycle_vae import EncoderD
 from CDARL.utils import seed_everything, Results, ReplayBuffer, random_shift, random_crop, random_conv, transform, create_logs, cat, RandomTransform
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, CoordConv2d, GaussianEncoder
+from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder, Encoder3dshapes, Decoder3dshapes
 
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
-parser.add_argument('--repr', default='adagvae', type=str)
-parser.add_argument('--use-encoder', default=True, action='store_true')
-parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carracing/2024-01-31/encoder_adagvae.pt', type=str)
-parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-01-15/model_step_180000.pt', type=str)
-parser.add_argument('--save_dir', default='/home/mila/l/lea.cote-turcotte/CDARL/logs', type=str)
+parser.add_argument('--repr', default='ppo', type=str)
+parser.add_argument('--use_encoder', default=True, action='store_true')
+parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-02-26/model_reduce_dim_step_330000.pt', type=str)
+parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-02-27/model_step_150000.pt', type=str)
+parser.add_argument('--ilcm_encoder_type', default='conv', type=str)
+parser.add_argument('--save_dir', default='/home/mila/l/lea.cote-turcotte/CDARL/carracing_logs', type=str)
 parser.add_argument('--algo', default='clean_rl', type=str)
-parser.add_argument('--seed', default=1, type=int)
+parser.add_argument('--seed', default=0, type=int)
 parser.add_argument('--torch_deterministic', default=True, type=bool)
 parser.add_argument('--cuda', default=True, type=bool)
 parser.add_argument('--capture_video', default=False, type=bool)
@@ -50,7 +51,7 @@ parser.add_argument('--anneal_lr', default=False, type=bool)
 parser.add_argument('--norm_adv', default=True, type=bool)
 parser.add_argument('--clip_vloss', default=True, type=bool)
 parser.add_argument('--target_kl', default=None, type=float)
-parser.add_argument('--latent-size', default=32, type=int)
+parser.add_argument('--latent_size', default=6, type=int)
 parser.add_argument('--log_interval', default=10, type=int)
 args = parser.parse_args()
 
@@ -77,11 +78,6 @@ class Env():
             self.observation_space = spaces.Box(low=0, high=255, shape=(3*self.img_stack,64,64), dtype=np.float)
         self.action_space = self.env.action_space
 
-    def process_obs(self, obs):
-        obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
-        obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
-        return np.transpose(obs, (2,0,1))
-
     def process_state(self, obs):
         obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
         obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
@@ -99,13 +95,11 @@ class Env():
             elif args.repr == 'ilcm':
                 with torch.no_grad():
                     z, _ = self.encoder.encoder.mean_std(obs)
-                    obs = self.causal.encode_to_causal(z).cpu().squeeze().numpy()
-                    print(obs.shape)
+                    state = self.causal.encode_to_causal(z).cpu().squeeze().numpy()
             elif args.repr == 'disent':
                 with torch.no_grad():
                     content, _, style = self.encoder(obs)
-                    obs = torch.cat([content, style], dim=1).cpu().squeeze().numpy()
-                    print(obs.shape)
+                    state = torch.cat([content, style], dim=1).cpu().squeeze().numpy()
         return state
 
     def reset(self):
@@ -161,9 +155,6 @@ class Env():
 
         return memory
 
-    def close(self):
-        self.env.close
-
 def create_model_reduce_dim():
     # Create model
     scm = create_img_scm()
@@ -194,35 +185,67 @@ def create_img_scm():
     return scm
 
 def create_img_encoder_decoder():
-    encoder = ImageEncoder(
-            in_resolution=64,
-            in_features=3,
-            out_features=32,
-            hidden_features=32,
-            batchnorm=False,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            min_std=1.e-3,
-            permutation=0,
-            )
-    decoder = ImageDecoder(
-            in_features=32,
-            out_resolution=64,
-            out_features=3,
-            hidden_features=32,
-            batchnorm=False,
-            min_std=1.0,
-            fix_std=True,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            permutation=0,
-            )
+    if args.ilcm_encoder_type == 'resnet':
+        encoder = ImageEncoder(
+                in_resolution=64,
+                in_features=3,
+                out_features=32,
+                hidden_features=32,
+                batchnorm=False,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                min_std=1.e-3,
+                permutation=0,
+                )
+        decoder = ImageDecoder(
+                in_features=32,
+                out_resolution=64,
+                out_features=3,
+                hidden_features=32,
+                batchnorm=False,
+                min_std=1.0,
+                fix_std=True,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                permutation=0,
+                )
+    elif args.ilcm_encoder_type == 'conv':
+        encoder = Encoder3dshapes(
+                in_resolution=64,
+                in_features=3,
+                out_features=32,
+                hidden_features=32,
+                batchnorm=False,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                min_std=1.e-3,
+                permutation=0,
+                )
+        decoder = Decoder3dshapes(
+                in_features=32,
+                out_resolution=64,
+                out_features=3,
+                hidden_features=32,
+                batchnorm=False,
+                min_std=1.0,
+                fix_std=True,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                permutation=0,
+                )
+        
     return encoder, decoder
 
 def create_ilcm():
@@ -238,7 +261,7 @@ def create_ilcm():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=6,
+            dim_z=args.latent_size,
             )
 
     return model
@@ -258,14 +281,14 @@ def create_mlp_encoder_decoder():
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
                 input_features=32,
-                output_features=6,
+                output_features=args.latent_size,
                 fix_std=False,
                 init_std=0.01,
                 min_std=0.0001,
             )
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
-                input_features=6,
+                input_features=args.latent_size,
                 output_features=32,
                 fix_std=True,
                 init_std=1.0,
@@ -283,7 +306,7 @@ def create_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=6,
+            dim_z=args.latent_size,
             min_std=0.2,
         )
     return scm
@@ -310,7 +333,6 @@ class EncoderBase(nn.Module):
     def forward(self, x):
         x = self.cnn_base(x)
         x = x.view(x.size(0), -1)
-
         return x
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -324,7 +346,7 @@ class Agent(nn.Module):
         self.input_dim = input_dim
         self.train_encoder = train_encoder
         if self.train_encoder == True:
-            self.encoder = EncoderBase(num_channels=3)
+            self.encoder = EncoderBase(num_channels=12)
             self.input_dim=self.encoder.out_dim
 
         conv_seqs = [
@@ -378,6 +400,7 @@ if __name__ == "__main__":
     # env setup
     encoder = None
     main = None
+    train_encoder = False
     if args.use_encoder:
         if args.repr == 'cycle_vae' or args.repr == 'vae' or args.repr == 'adagvae':
             encoder = Encoder(latent_size = args.latent_size)
@@ -407,7 +430,7 @@ if __name__ == "__main__":
             main.load_state_dict(weights)
             print("Loaded Weights Main")
         elif args.repr == 'disent':
-            class_latent_size = 16
+            class_latent_size = 8
             content_latent_size = 32
             encoder = EncoderD(class_latent_size, content_latent_size)
             weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
@@ -421,7 +444,9 @@ if __name__ == "__main__":
     action_space = env.action_space.shape
     observation_space = env.observation_space.shape
 
-    agent = Agent(input_dim=args.latent_size*args.img_stack).to(device)
+    if encoder == None:
+        train_encoder = True
+    agent = Agent(input_dim=args.latent_size*args.img_stack, train_encoder=train_encoder).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
@@ -464,6 +489,7 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, done, die = env.step(action * np.array([2., 1., 1.]) + np.array([-1., 0., 0.]))
+            #print(next_obs.shape, reward, done, die)
             total_reward += reward
             episode_lenght += 1
             rewards[step] = reward
@@ -484,6 +510,7 @@ if __name__ == "__main__":
                 next_obs = torch.tensor(env.reset()).to(device)
                 next_done = 0
                 die = 0
+                #print(next_obs.shape, reward, next_done, die)
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -567,3 +594,10 @@ if __name__ == "__main__":
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+
+        if episode > 5000:
+            print('Last Ep {}\tMoving average score: {:.2f}'.format(episode, running_score))
+            torch.save(agent.state_dict(), os.path.join(log_dir, "policy.pt"))
+            results.save_logs(log_dir)
+            results.generate_plot(log_dir, log_dir)
+            break

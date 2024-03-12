@@ -25,6 +25,9 @@ export CARLA_ROOT=//home/mila/l/lea.cote-turcotte/carla
 export PYTHONPATH=$PYTHONPATH:${CARLA_ROOT}/PythonAPI/carla/dist/carla-0.9.8-py3.5-linux-x86_64.egg:${CARLA_ROOT}/PythonAPI/carla/agents:${CARLA_ROOT}/PythonAPI/carla
 
 cd carla
+# start carla server with 
+DISPLAY= ./CarlaUE4.sh -opengl -carla-port=2000
+# OR
 ./CarlaUE4.sh -windowed -carla-port=2000
 
 # in first terminal 

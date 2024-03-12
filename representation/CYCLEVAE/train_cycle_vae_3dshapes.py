@@ -18,14 +18,14 @@ from cycle_vae import DisentangledVAE
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
-parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/representation/CDARL/CYCLEVAE/runs/3dshapes", type=str)
-parser.add_argument('--batch-size', default=32, type=int)
-parser.add_argument('--nb-groups', default=2, type=int)
+parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/3dshapes", type=str)
+parser.add_argument('--batch-size', default=50, type=int)
+parser.add_argument('--nb-groups', default=5, type=int)
 parser.add_argument('--num-epochs', default=10000, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--learning-rate', default=0.0001, type=float)
 parser.add_argument('--beta', default=1, type=int)
-parser.add_argument('--save-freq', default=100, type=int)
+parser.add_argument('--save-freq', default=1000, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
 parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--class-latent-size', default=8, type=int) # 4
@@ -83,6 +83,7 @@ def main():
     # create directories
     log_dir = os.path.join(args.save_dir, str(date.today()))
     os.makedirs(log_dir, exist_ok=True)
+    print(log_dir)
 
     #save args
     with open(os.path.join(log_dir, "args.json"), 'w') as f:
@@ -117,7 +118,6 @@ def main():
 
         # backward circle
         imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
-        save_image(imgs, "/home/mila/l/lea.cote-turcotte/CDARL/figures/cycle_vae_groups_3dshapes.png", nrow=10)
         # batch of 50 imagees with mix classes
         bloss = backward_loss(imgs, model, device)
 

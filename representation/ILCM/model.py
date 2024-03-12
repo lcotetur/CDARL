@@ -535,6 +535,241 @@ class CoordConv2d(nn.Module):
     def forward(self, x):
         return self.conv(add_coords(x))
 
+class ImageEncoderCarla(nn.Module):
+    """
+    Encoder block
+    Built for a 3x128x128 image and will result in a latent vector of size z
+    """
+
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        in_resolution=128,
+        hidden_features=128,
+        batchnorm=True,
+        batchnorm_epsilon=0.1,
+        conv_class=nn.Conv2d,
+        mlp_layers=0,
+        mlp_hidden=64,
+        min_std=0.0,
+        elementwise_layers=1,
+        elementwise_hidden=16,
+        permutation=0,
+    ):
+        super().__init__()
+
+        self.net = self._make_conv_net(
+            batchnorm,
+            batchnorm_epsilon,
+            conv_class,
+            hidden_features,
+            in_features,
+            mlp_hidden,
+            mlp_layers,
+            out_features,
+            in_resolution,
+        )
+
+        hidden_units = [mlp_hidden] * mlp_layers + [2 * out_features]
+        self.mlp = make_mlp(hidden_units, activation="leaky_relu", initial_activation="leaky_relu")
+        self.register_buffer("min_std", torch.tensor(min_std))
+
+        self.elementwise = make_elementwise_mlp(
+            [elementwise_hidden] * elementwise_layers, activation="leaky_relu"
+        )
+
+        if permutation == 0:
+            self.permutation = None
+        else:
+            self.permutation = generate_permutation(out_features, permutation, inverse=False)
+
+    def _make_conv_net(
+        self,
+        batchnorm,
+        batchnorm_epsilon,
+        conv_class,
+        hidden_features,
+        in_features,
+        mlp_hidden,
+        mlp_layers,
+        out_features,
+        in_resolution,
+        resnet=True
+    ):
+
+        net_out_features = mlp_hidden if mlp_layers > 0 else 2 * out_features
+        kwargs = {
+            "batchnorm": batchnorm,
+            "batchnorm_epsilon": batchnorm_epsilon,
+            "conv_class": conv_class,
+        }
+
+        net = nn.Sequential(
+                ResNetDown(in_features, hidden_features, **kwargs),
+                ResNetDown(hidden_features, 2 * hidden_features, **kwargs),
+                ResNetDown(2 * hidden_features, 4 * hidden_features, **kwargs),
+                ResNetDown(4 * hidden_features, 8 * hidden_features, **kwargs),
+                ResNetDown(8 * hidden_features, 8 * hidden_features, **kwargs),
+                ResNetDown(8 * hidden_features, 8 * hidden_features, **kwargs),
+                conv_class(8 * hidden_features, net_out_features, 2),
+            )
+
+        return net
+
+    def forward(
+        self,
+        x,
+        eval_likelihood_at=None,
+        deterministic=False,
+        return_mean=False,
+        return_std=False,
+        full=True,
+        reduction="sum",
+    ):
+        """
+        Encode image, returns Gaussian
+
+        [b, in_channels, 64, 64] -> Gaussian over [b, out_features]
+        See gaussian_encode for parameters and return type.
+        """
+
+        mean, std = self.mean_std(x)
+        return gaussian_encode(
+            mean,
+            std,
+            eval_likelihood_at,
+            deterministic,
+            return_mean=return_mean,
+            return_std=return_std,
+            full=full,
+            reduction=reduction,
+        )
+
+    def mean_std(self, x):
+        """Encode image, return mean and std"""
+        hidden = self.net(x).squeeze(3).squeeze(2)
+        hidden = self.mlp(hidden)
+        mean, std = vector_to_gaussian(hidden, min_std=self.min_std)
+
+        mean = self.elementwise(mean)
+
+        if self.permutation is not None:
+            mean = mean[:, self.permutation]
+            std = std[:, self.permutation]
+
+        return mean, std
+
+    def freeze(self):
+        """Freeze convolutional net and MLP, but not elementwise transformation"""
+        for parameter in chain(self.mlp.parameters(), self.net.parameters()):
+            parameter.requires_grad = False
+
+    def freezable_parameters(self):
+        """Returns parameters that should be frozen during training"""
+        return chain(self.mlp.parameters(), self.net.parameters())
+
+    def unfreezable_parameters(self):
+        """Returns parameters that should not be frozen during training"""
+        return self.elementwise.parameters()
+
+class BasicEncoderCarla(nn.Module):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        in_resolution=128,
+        hidden_features=128,
+        batchnorm=True,
+        batchnorm_epsilon=0.1,
+        conv_class=nn.Conv2d,
+        mlp_layers=0,
+        mlp_hidden=64,
+        min_std=0.0,
+        elementwise_layers=1,
+        elementwise_hidden=16,
+        permutation=0,
+    ):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Conv2d(in_features, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+        )
+
+        hidden_units = [9216, 128, 2 * out_features] #[mlp_hidden] * mlp_layers + [2 * out_features]
+        self.mlp = make_mlp(hidden_units, activation="leaky_relu", initial_activation="leaky_relu")
+        self.register_buffer("min_std", torch.tensor(min_std))
+
+        self.elementwise = make_elementwise_mlp(
+            [elementwise_hidden] * elementwise_layers, activation="leaky_relu"
+        )
+
+        if permutation == 0:
+            self.permutation = None
+        else:
+            self.permutation = generate_permutation(out_features, permutation, inverse=False)
+
+
+    def forward(
+        self,
+        x,
+        eval_likelihood_at=None,
+        deterministic=False,
+        return_mean=False,
+        return_std=False,
+        full=True,
+        reduction="sum",
+    ):
+        """
+        Encode image, returns Gaussian
+
+        [b, in_channels, 128, 128] -> Gaussian over [b, out_features]
+        See gaussian_encode for parameters and return type.
+        """
+
+        mean, std = self.mean_std(x)
+        return gaussian_encode(
+            mean,
+            std,
+            eval_likelihood_at,
+            deterministic,
+            return_mean=return_mean,
+            return_std=return_std,
+            full=full,
+            reduction=reduction,
+        )
+
+    def mean_std(self, x):
+        """Encode image, return mean and std"""
+        x = self.net(x)
+        x = x.view(x.size(0), -1)
+        hidden = self.mlp(x)
+        mean, std = vector_to_gaussian(hidden, min_std=self.min_std)
+
+        mean = self.elementwise(mean)
+
+        if self.permutation is not None:
+            mean = mean[:, self.permutation]
+            std = std[:, self.permutation]
+
+        return mean, std
+
+    def freeze(self):
+        """Freeze convolutional net and MLP, but not elementwise transformation"""
+        for parameter in chain(self.mlp.parameters(), self.net.parameters()):
+            parameter.requires_grad = False
+
+    def freezable_parameters(self):
+        """Returns parameters that should be frozen during training"""
+        return chain(self.mlp.parameters(), self.net.parameters())
+
+    def unfreezable_parameters(self):
+        """Returns parameters that should not be frozen during training"""
+        return self.elementwise.parameters()
+
 class ImageEncoder(nn.Module):
     """
     Encoder block
@@ -605,22 +840,28 @@ class ImageEncoder(nn.Module):
             "conv_class": conv_class,
         }
 
-        if resnet:
+        if in_resolution == 64:
             net = nn.Sequential(
-                    ResNetDown(in_features, hidden_features, **kwargs),
-                    ResNetDown(hidden_features, 2 * hidden_features, **kwargs),
-                    ResNetDown(2 * hidden_features, 4 * hidden_features, **kwargs),
-                    ResNetDown(4 * hidden_features, 8 * hidden_features, **kwargs),
-                    ResNetDown(8 * hidden_features, 8 * hidden_features, **kwargs),
-                    ResNetDown(8 * hidden_features, 8 * hidden_features, **kwargs),
-                    conv_class(8 * hidden_features, net_out_features, 1),
-                )
-        else: 
+                ResNetDown(in_features, hidden_features, **kwargs),
+                ResNetDown(hidden_features, 2 * hidden_features, **kwargs),
+                ResNetDown(2 * hidden_features, 4 * hidden_features, **kwargs),
+                ResNetDown(4 * hidden_features, 8 * hidden_features, **kwargs),
+                ResNetDown(8 * hidden_features, 8 * hidden_features, **kwargs),
+                ResNetDown(8 * hidden_features, 8 * hidden_features, **kwargs),
+                conv_class(8 * hidden_features, net_out_features, 1),
+            )
+        elif in_resolution == 512:
             net = nn.Sequential(
-                nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
-                nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
-                nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
-                nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+                ResNetDown(in_features, hidden_features, **kwargs),
+                ResNetDown(hidden_features, 2 * hidden_features, **kwargs),
+                ResNetDown(2 * hidden_features, 4 * hidden_features, **kwargs),
+                ResNetDown(4 * hidden_features, 8 * hidden_features, **kwargs),
+                ResNetDown(8 * hidden_features, 16 * hidden_features, **kwargs),
+                ResNetDown(16 * hidden_features, 32 * hidden_features, **kwargs),
+                ResNetDown(32 * hidden_features, 32 * hidden_features, **kwargs),
+                ResNetDown(32 * hidden_features, 32 * hidden_features, **kwargs),
+                ResNetDown(32 * hidden_features, 32 * hidden_features, **kwargs),
+                conv_class(32 * hidden_features, net_out_features, 1),
             )
 
         return net
@@ -658,6 +899,103 @@ class ImageEncoder(nn.Module):
         """Encode image, return mean and std"""
         hidden = self.net(x).squeeze(3).squeeze(2)
         hidden = self.mlp(hidden)
+        mean, std = vector_to_gaussian(hidden, min_std=self.min_std)
+
+        mean = self.elementwise(mean)
+
+        if self.permutation is not None:
+            mean = mean[:, self.permutation]
+            std = std[:, self.permutation]
+
+        return mean, std
+
+    def freeze(self):
+        """Freeze convolutional net and MLP, but not elementwise transformation"""
+        for parameter in chain(self.mlp.parameters(), self.net.parameters()):
+            parameter.requires_grad = False
+
+    def freezable_parameters(self):
+        """Returns parameters that should be frozen during training"""
+        return chain(self.mlp.parameters(), self.net.parameters())
+
+    def unfreezable_parameters(self):
+        """Returns parameters that should not be frozen during training"""
+        return self.elementwise.parameters()
+
+class Encoder3dshapes(nn.Module):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        in_resolution=64,
+        hidden_features=64,
+        batchnorm=True,
+        batchnorm_epsilon=0.1,
+        conv_class=nn.Conv2d,
+        mlp_layers=0,
+        mlp_hidden=64,
+        min_std=0.0,
+        elementwise_layers=1,
+        elementwise_hidden=16,
+        permutation=0,
+    ):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Conv2d(in_features, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+        )
+
+        hidden_units = [1024, 128, 2 * out_features] #[mlp_hidden] * mlp_layers + [2 * out_features]
+        self.mlp = make_mlp(hidden_units, activation="leaky_relu", initial_activation="leaky_relu")
+        self.register_buffer("min_std", torch.tensor(min_std))
+
+        self.elementwise = make_elementwise_mlp(
+            [elementwise_hidden] * elementwise_layers, activation="leaky_relu"
+        )
+
+        if permutation == 0:
+            self.permutation = None
+        else:
+            self.permutation = generate_permutation(out_features, permutation, inverse=False)
+
+
+    def forward(
+        self,
+        x,
+        eval_likelihood_at=None,
+        deterministic=False,
+        return_mean=False,
+        return_std=False,
+        full=True,
+        reduction="sum",
+    ):
+        """
+        Encode image, returns Gaussian
+
+        [b, in_channels, 64, 64] -> Gaussian over [b, out_features]
+        See gaussian_encode for parameters and return type.
+        """
+
+        mean, std = self.mean_std(x)
+        return gaussian_encode(
+            mean,
+            std,
+            eval_likelihood_at,
+            deterministic,
+            return_mean=return_mean,
+            return_std=return_std,
+            full=full,
+            reduction=reduction,
+        )
+
+    def mean_std(self, x):
+        """Encode image, return mean and std"""
+        x = self.net(x)
+        x = x.view(x.size(0), -1)
+        hidden = self.mlp(x)
         mean, std = vector_to_gaussian(hidden, min_std=self.min_std)
 
         mean = self.elementwise(mean)
@@ -719,6 +1057,208 @@ class ResNetDown(nn.Module):
         x = F.leaky_relu(x + skip)
         return x
 
+class ImageDecoderCarla(nn.Module):
+    """
+    Decoder block
+    """
+
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        out_resolution=128,
+        hidden_features=128,
+        batchnorm=True,
+        batchnorm_epsilon=0.1,
+        conv_class=nn.Conv2d,
+        fix_std=False,
+        min_std=1e-3,
+        mlp_layers=2,
+        mlp_hidden=64,
+        elementwise_layers=1,
+        elementwise_hidden=16,
+        permutation=0,
+    ):
+        super().__init__()
+
+        if permutation == 0:
+            self.permutation = None
+        else:
+            self.permutation = generate_permutation(in_features, permutation, inverse=True)
+
+        self.elementwise = make_elementwise_mlp(
+            [elementwise_hidden] * elementwise_layers, activation="leaky_relu"
+        )
+
+        hidden_units = [in_features] + [mlp_hidden] * mlp_layers
+        self.mlp = make_mlp(hidden_units, activation="leaky_relu", final_activation="leaky_relu")
+
+        self.net = self._create_conv_net(
+            batchnorm,
+            batchnorm_epsilon,
+            conv_class,
+            fix_std,
+            hidden_features,
+            in_features,
+            mlp_hidden,
+            mlp_layers,
+            out_features,
+            out_resolution,
+        )
+        self.fix_std = fix_std
+        self.register_buffer("min_std", torch.tensor(min_std))
+
+    def _create_conv_net(
+        self,
+        batchnorm,
+        batchnorm_epsilon,
+        conv_class,
+        fix_std,
+        hidden_features,
+        in_features,
+        mlp_hidden,
+        mlp_layers,
+        out_features,
+        out_resolution
+    ):
+        net_in_features = mlp_hidden if mlp_layers > 0 else in_features
+        feature_multiplier = 1 if fix_std else 2
+        kwargs = {
+            "batchnorm": batchnorm,
+            "batchnorm_epsilon": batchnorm_epsilon,
+            "conv_class": conv_class,
+        }
+
+
+        net = nn.Sequential(
+                    ResNetUp(net_in_features, hidden_features * 8, **kwargs),
+                    ResNetUp(hidden_features * 8, hidden_features * 8, **kwargs),
+                    ResNetUp(hidden_features * 8, hidden_features * 4, **kwargs),
+                    ResNetUp(hidden_features * 4, hidden_features * 2, **kwargs),
+                    ResNetUp(hidden_features * 2, hidden_features, **kwargs),
+                    ResNetUp(hidden_features, hidden_features // 2, **kwargs),
+                    ResNetUp(hidden_features // 2, hidden_features // 2, **kwargs),
+                    conv_class(hidden_features // 2, feature_multiplier * out_features, 1),
+                )
+
+        return net
+
+    def forward(self, x, eval_likelihood_at=None, deterministic=False, return_mean=False, return_std=False, full=True, reduction="sum"):
+        """
+        Decodes latent into image, returns Gaussian
+
+        [b, in_channels] -> Gaussian over [b, out_features, 128, 128]
+        See gaussian_encode for parameters and return type.
+        """
+
+        mean, std = self.mean_std(x)
+        return gaussian_encode(mean, std, eval_likelihood_at, deterministic, return_mean=return_mean, return_std=return_std, full=full, reduction=reduction)
+
+    def mean_std(self, x):
+        """Given latent, compute mean and std"""
+        if self.permutation is not None:
+            x = x[:, self.permutation]
+
+        hidden = self.elementwise(x)
+        hidden = self.mlp(hidden)
+        hidden = self.net(hidden[:, :, None, None])
+        mean, std = vector_to_gaussian(hidden, fix_std=self.fix_std, min_std=self.min_std)
+        return mean, std
+
+    def freezable_parameters(self):
+        """Returns parameters that should be frozen during training"""
+        return chain(self.mlp.parameters(), self.net.parameters())
+
+    def unfreezable_parameters(self):
+        """Returns parameters that should not be frozen during training"""
+        return self.elementwise.parameters()
+
+    def freeze(self):
+        """Freeze convolutional net and MLP, but not elementwise transformation"""
+        for parameter in chain(self.mlp.parameters(), self.net.parameters()):
+            parameter.requires_grad = False
+
+class BasicDecoderCarla(nn.Module):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        out_resolution=128,
+        hidden_features=128,
+        batchnorm=True,
+        batchnorm_epsilon=0.1,
+        conv_class=nn.Conv2d,
+        fix_std=False,
+        min_std=1e-3,
+        mlp_layers=2,
+        mlp_hidden=64,
+        elementwise_layers=1,
+        elementwise_hidden=16,
+        permutation=0,
+    ):
+        super().__init__()
+        if permutation == 0:
+            self.permutation = None
+        else:
+            self.permutation = generate_permutation(in_features, permutation, inverse=True)
+
+        self.elementwise = make_elementwise_mlp(
+            [elementwise_hidden] * elementwise_layers, activation="leaky_relu"
+        )
+
+        hidden_units = [in_features, 128, 9216] #[in_features] + [mlp_hidden] * mlp_layers
+        self.mlp = make_mlp(hidden_units, activation="leaky_relu", final_activation="leaky_relu")
+
+        self.net = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=5, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(32, 3, kernel_size=4, stride=2), nn.Sigmoid(),
+        )
+
+        self.fix_std = fix_std
+        self.register_buffer("min_std", torch.tensor(min_std))
+
+    #def forward(self, x):
+        #x = self.fc(x)
+        #x = x.unsqueeze(-1).unsqueeze(-1)
+        #x = self.main(x)
+        #return x
+
+    def forward(self, x, eval_likelihood_at=None, deterministic=False, return_mean=False, return_std=False, full=True, reduction="sum"):
+        """
+        Decodes latent into image, returns Gaussian
+
+        [b, in_channels] -> Gaussian over [b, out_features, 64, 64]
+        See gaussian_encode for parameters and return type.
+        """
+
+        mean, std = self.mean_std(x)
+        return gaussian_encode(mean, std, eval_likelihood_at, deterministic, return_mean=return_mean, return_std=return_std, full=full, reduction=reduction)
+
+    def mean_std(self, x):
+        """Given latent, compute mean and std"""
+        if self.permutation is not None:
+            x = x[:, self.permutation]
+
+        hidden = self.elementwise(x)
+        hidden = self.mlp(hidden)
+        hidden = self.net(hidden[:, :, None, None])
+        mean, std = vector_to_gaussian(hidden, fix_std=self.fix_std, min_std=self.min_std)
+        return mean, std
+
+    def freezable_parameters(self):
+        """Returns parameters that should be frozen during training"""
+        return chain(self.mlp.parameters(), self.net.parameters())
+
+    def unfreezable_parameters(self):
+        """Returns parameters that should not be frozen during training"""
+        return self.elementwise.parameters()
+
+    def freeze(self):
+        """Freeze convolutional net and MLP, but not elementwise transformation"""
+        for parameter in chain(self.mlp.parameters(), self.net.parameters()):
+            parameter.requires_grad = False
 
 class ImageDecoder(nn.Module):
     """
@@ -793,22 +1333,28 @@ class ImageDecoder(nn.Module):
             "conv_class": conv_class,
         }
 
-        if resnet:
+        if out_resolution == 64:
             net = nn.Sequential(
-                    ResNetUp(net_in_features, hidden_features * 8, **kwargs),
-                    ResNetUp(hidden_features * 8, hidden_features * 8, **kwargs),
-                    ResNetUp(hidden_features * 8, hidden_features * 4, **kwargs),
-                    ResNetUp(hidden_features * 4, hidden_features * 2, **kwargs),
-                    ResNetUp(hidden_features * 2, hidden_features, **kwargs),
-                    ResNetUp(hidden_features, hidden_features // 2, **kwargs),
-                    conv_class(hidden_features // 2, feature_multiplier * out_features, 1),
-                )
-        else:
+                ResNetUp(net_in_features, hidden_features * 8, **kwargs),
+                ResNetUp(hidden_features * 8, hidden_features * 8, **kwargs),
+                ResNetUp(hidden_features * 8, hidden_features * 4, **kwargs),
+                ResNetUp(hidden_features * 4, hidden_features * 2, **kwargs),
+                ResNetUp(hidden_features * 2, hidden_features, **kwargs),
+                ResNetUp(hidden_features, hidden_features // 2, **kwargs),
+                conv_class(hidden_features // 2, feature_multiplier * out_features, 1),
+            )
+        elif out_resolution == 512:
             net = nn.Sequential(
-                nn.ConvTranspose2d(flatten_size, 128, 5, stride=2), nn.ReLU(),
-                nn.ConvTranspose2d(128, 64, 5, stride=2), nn.ReLU(),
-                nn.ConvTranspose2d(64, 32, 6, stride=2), nn.ReLU(),
-                nn.ConvTranspose2d(32, 3, 6, stride=2), nn.Sigmoid()
+                ResNetUp(net_in_features, hidden_features * 32, **kwargs),
+                ResNetUp(hidden_features * 32, hidden_features * 32, **kwargs),
+                ResNetUp(hidden_features * 32, hidden_features * 32, **kwargs),
+                ResNetUp(hidden_features * 32, hidden_features * 16, **kwargs),
+                ResNetUp(hidden_features * 16, hidden_features * 8, **kwargs),
+                ResNetUp(hidden_features * 8, hidden_features * 4, **kwargs),
+                ResNetUp(hidden_features * 4, hidden_features * 2, **kwargs),
+                ResNetUp(hidden_features * 2, hidden_features, **kwargs),
+                ResNetUp(hidden_features, hidden_features // 2, **kwargs),
+                conv_class(hidden_features // 2, feature_multiplier * out_features, 1),
             )
 
         return net
@@ -848,6 +1394,88 @@ class ImageDecoder(nn.Module):
         for parameter in chain(self.mlp.parameters(), self.net.parameters()):
             parameter.requires_grad = False
 
+class Decoder3dshapes(nn.Module):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        out_resolution=64,
+        hidden_features=64,
+        batchnorm=True,
+        batchnorm_epsilon=0.1,
+        conv_class=nn.Conv2d,
+        fix_std=False,
+        min_std=1e-3,
+        mlp_layers=2,
+        mlp_hidden=64,
+        elementwise_layers=1,
+        elementwise_hidden=16,
+        permutation=0,
+    ):
+        super().__init__()
+
+        if permutation == 0:
+            self.permutation = None
+        else:
+            self.permutation = generate_permutation(in_features, permutation, inverse=True)
+
+        self.elementwise = make_elementwise_mlp(
+            [elementwise_hidden] * elementwise_layers, activation="leaky_relu"
+        )
+
+        hidden_units = [in_features, 128, 1024] #[in_features] + [mlp_hidden] * mlp_layers
+        self.mlp = make_mlp(hidden_units, activation="leaky_relu", final_activation="leaky_relu")
+
+        self.net = nn.Sequential(
+            nn.ConvTranspose2d(1024, 128, 5, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, 5, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, 6, stride=2), nn.ReLU(),
+            nn.ConvTranspose2d(32, 3, 6, stride=2), nn.Sigmoid()
+        )
+
+        self.fix_std = fix_std
+        self.register_buffer("min_std", torch.tensor(min_std))
+
+    #def forward(self, x):
+        #x = self.fc(x)
+        #x = x.unsqueeze(-1).unsqueeze(-1)
+        #x = self.main(x)
+        #return x
+
+    def forward(self, x, eval_likelihood_at=None, deterministic=False, return_mean=False, return_std=False, full=True, reduction="sum"):
+        """
+        Decodes latent into image, returns Gaussian
+
+        [b, in_channels] -> Gaussian over [b, out_features, 64, 64]
+        See gaussian_encode for parameters and return type.
+        """
+
+        mean, std = self.mean_std(x)
+        return gaussian_encode(mean, std, eval_likelihood_at, deterministic, return_mean=return_mean, return_std=return_std, full=full, reduction=reduction)
+
+    def mean_std(self, x):
+        """Given latent, compute mean and std"""
+        if self.permutation is not None:
+            x = x[:, self.permutation]
+
+        hidden = self.elementwise(x)
+        hidden = self.mlp(hidden)
+        hidden = self.net(hidden[:, :, None, None])
+        mean, std = vector_to_gaussian(hidden, fix_std=self.fix_std, min_std=self.min_std)
+        return mean, std
+
+    def freezable_parameters(self):
+        """Returns parameters that should be frozen during training"""
+        return chain(self.mlp.parameters(), self.net.parameters())
+
+    def unfreezable_parameters(self):
+        """Returns parameters that should not be frozen during training"""
+        return self.elementwise.parameters()
+
+    def freeze(self):
+        """Freeze convolutional net and MLP, but not elementwise transformation"""
+        for parameter in chain(self.mlp.parameters(), self.net.parameters()):
+            parameter.requires_grad = False
 
 class ResNetUp(nn.Module):
     """

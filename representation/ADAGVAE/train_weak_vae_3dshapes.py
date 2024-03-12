@@ -13,37 +13,32 @@ import os
 
 from CDARL.data.shapes3d_data import Shape3dDataset
 from CDARL.utils import seed_everything, create_logs
-from weak_vae import ADAGVAE, compute_loss
+from weak_vae import ADAGVAE3dshapes, compute_loss, ADAGVAE
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5', type=str)
-parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/runs/3dshapes", type=str)
+parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/3dshapes", type=str)
 parser.add_argument('--batch-size', default=32, type=int)
-parser.add_argument('--num-epochs', default=10000, type=int)
+parser.add_argument('--num-epochs', default=300000, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--learning-rate', default=0.0001, type=float)
 parser.add_argument('--beta', default=1, type=int)
 parser.add_argument('--save-freq', default=1000, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
-parser.add_argument('--latent-size', default=12, type=int)
+parser.add_argument('--latent-size', default=10, type=int)
 parser.add_argument('--seed', default=1, type=int)
+parser.add_argument('--loss', default='mse', type=str)
 parser.add_argument('--flatten-size', default=1024, type=int)
 parser.add_argument('--verbose', default=True, type=bool)
 args = parser.parse_args()
 
-Model = ADAGVAE
+Model = ADAGVAE3dshapes
 
 def main():
     seed_everything(args.seed)
 
     # create directories
     log_dir = create_logs(args)
-    #log_dir = os.path.join(args.save_dir, str(date.today()) + f'{args.seed}')
-    #os.makedirs(log_dir, exist_ok=True)
-
-    #save args
-    #with open(os.path.join(log_dir, "args.json"), 'w') as f:
-        #json.dump(args.__dict__, f, indent=2)
 
     # create dataset
     print('loading data')
@@ -55,14 +50,14 @@ def main():
     model = Model(latent_size = args.latent_size)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)# betas=(0.9, 0.999), eps=0.001
 
     # do the training
     batch_count = 0
     print('training')
     epoch_generator = trange(args.num_epochs, disable=not args.verbose)
     for i_epoch in epoch_generator:
-        imgs = dataset.create_weak_vae_batch(args.batch_size, device, k=2)
+        imgs = dataset.create_weak_vae_batch(args.batch_size, device, k=1)
         batch_count += args.batch_size * 2
         optimizer.zero_grad()
 

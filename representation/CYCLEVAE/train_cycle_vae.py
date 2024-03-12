@@ -32,16 +32,15 @@ parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--class-latent-size', default=8, type=int)
 parser.add_argument('--content-latent-size', default=32, type=int)
 parser.add_argument('--flatten-size', default=1024, type=int)
-parser.add_argument('--stack_frames', default=True, type=bool)
-parser.add_argument('--img_stack', default=3, type=int)
-parser.add_argument('--random-augmentations', default=True, type=bool)
+parser.add_argument('--stack-frames', default=False, type=bool)
+parser.add_argument('--img-stack', default=1, type=int)
+parser.add_argument('--random-augmentations', default=False, type=bool)
 parser.add_argument('--verbose', default=True, type=bool)
 parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
-args = parser.parse_args()
 
 Model = DisentangledVAE
 
-def main():
+def main(args):
     seed_everything(args.seed)
     
     # create directories
@@ -75,15 +74,18 @@ def main():
                 batch_count += 1
                 # forward circle
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
+                '''
                 if args.stack_frames:
                     imgs = imgs.repeat(1, 1, args.img_stack, 1, 1)
                     if args.random_augmentations:
                         imgs = imgs.reshape(-1, *imgs.shape[2:])
-                        imgs = RandomTransform(imgs).apply_transformations_stack(num_frames=args.img_stack, nb_class=5, value=0.3)
+                        imgs = RandomTransform(imgs).apply_random_transformations_stack(num_frames=args.img_stack, nb_class=5, value=0.3)
                 else:
-                    if args.random_augmentations:
-                        imgs = imgs.reshape(-1, *imgs.shape[2:])
-                        imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
+                '''
+                imgs = imgs.reshape(-1, *imgs.shape[2:])
+                imgs = imgs.repeat(2, 1, 1, 1)
+                imgs = RandomTransform(imgs).apply_transformations(nb_class=10, value=[0, 0, 0, 0, 0, 0.1, 0.1, 0.1, 0.1, 0.1])
+                        
                 optimizer.zero_grad()
 
                 floss = 0
@@ -95,6 +97,7 @@ def main():
 
                 # backward circle
                 imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
+                save_image(imgs, os.path.join(log_dir,'input.png'), nrow=10)
                 # batch of 50 imagees with mix classes
                 bloss = backward_loss(imgs, model, device)
 
@@ -127,7 +130,8 @@ def main():
                         torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_cycle_vae.pt"))
 
             # load next splitted data
-            updateloader(args, loader, dataset)
+            loader = updateloader(args, loader, dataset)
 
 if __name__ == '__main__':
-    main()
+    args = parser.parse_args()
+    main(args)

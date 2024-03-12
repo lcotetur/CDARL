@@ -18,22 +18,24 @@ from CDARL.representation.VAE.vae import Encoder
 from CDARL.representation.CYCLEVAE.cycle_vae import EncoderD
 from CDARL.utils import seed_everything, Results, ReplayBuffer, random_shift, random_crop, random_conv, transform, create_logs, cat, RandomTransform
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, CoordConv2d, GaussianEncoder
+from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder, Encoder3dshapes, Decoder3dshapes
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--algo', default='clean_rl', type=str)
-parser.add_argument('--env-name', default="CarRacing-v0", type=str)
+parser.add_argument('--env_name', default="CarRacing-v0", type=str)
 parser.add_argument('--repr', default='cycle_vae', type=str)
-parser.add_argument('--use-encoder', default=True, action='store_true')
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/logs/cycle_vae/2024-01-30_1/policy.pt', type=str)
+parser.add_argument('--number', default=0, type=int)
+parser.add_argument('--use_encoder', default=True, action='store_true')
+parser.add_argument('--model_path', default='/home/mila/l/lea.cote-turcotte/CDARL/logs/cycle_vae/2024-01-30_1/policy.pt', type=str)
 parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carracing/2023-11-20/encoder_cycle_vae.pt', type=str)
-parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-01-15/model_step_180000.pt', type=str)
-parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results', type=str)
+parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-03/model_step_140000.pt', type=str)
+parser.add_argument('--ilcm_encoder_type', default='conv', type=str)
+parser.add_argument('--save_path', default='/home/mila/l/lea.cote-turcotte/CDARL/results/carracing', type=str)
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
-parser.add_argument('--num-episodes', default=100, type=int)
-parser.add_argument('--latent-size', default=32, type=int)
-parser.add_argument('--action-repeat', default=4, type=int)
-parser.add_argument('--img-stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
+parser.add_argument('--num_episodes', default=100, type=int)
+parser.add_argument('--latent_size', default=32, type=int)
+parser.add_argument('--action_repeat', default=4, type=int)
+parser.add_argument('--img_stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--save_video', default=False, action='store_true')
 parser.add_argument('--work_dir', default='/home/mila/l/lea.cote-turcotte/CDARL', type=str)
 parser.add_argument('--nb_domain', default=4, type=int)
@@ -61,7 +63,7 @@ class Env():
             self.observation_space = spaces.Box(low=0, high=255, shape=(3*self.img_stack,64,64), dtype=np.float)
         self.action_space = self.env.action_space
 
-    def process_state(self, obs, color, crop):
+    def process_state(self, obs, color, crop, domain):
         obs = np.ascontiguousarray(obs, dtype=np.float32) / 255
         obs = cv2.resize(obs[:84, :, :], dsize=(64,64), interpolation=cv2.INTER_NEAREST)
         obs = np.transpose(obs, (2,0,1))
@@ -70,7 +72,7 @@ class Env():
             return obs #(3, 64, 64)
         else:
             obs = np.expand_dims(obs, axis=0) #(1, 3, 64, 64)
-            save_image(torch.tensor(obs), os.path.join('/home/mila/l/lea.cote-turcotte/CDARL/checkimages', "cleanrl_eval.png"))
+            save_image(torch.tensor(obs), os.path.join('/home/mila/l/lea.cote-turcotte/CDARL/checkimages', "domain_%s.png" % domain))
             obs = torch.from_numpy(obs).float().to(self.device)
             if args.repr == 'cycle_vae' or args.repr == 'vae' or args.repr == 'adagvae':
                 with torch.no_grad():
@@ -79,31 +81,29 @@ class Env():
             elif args.repr == 'ilcm':
                 with torch.no_grad():
                     z, _ = self.encoder.encoder.mean_std(obs)
-                    obs = self.causal.encode_to_causal(z).cpu().squeeze().numpy()
-                    print(obs.shape)
+                    state = self.causal.encode_to_causal(z).cpu().squeeze().numpy()
             elif args.repr == 'disent':
                 with torch.no_grad():
                     content, _, style = self.encoder(obs)
-                    obs = torch.cat([content, style], dim=1).cpu().squeeze().numpy()
-                    print(obs.shape)
+                    state = torch.cat([content, style], dim=1).cpu().squeeze().numpy()
         return state
 
-    def reset(self, color, crop):
+    def reset(self, color, crop, domain):
         self.die = False
         img_rgb = self.env.reset()
-        processed_obs = self.process_state(img_rgb, color, crop)
+        processed_obs = self.process_state(img_rgb, color, crop, domain)
         self.stack = [processed_obs] * self.img_stack
         state = np.concatenate(self.stack, axis=0)
         return state
 
-    def step(self, action, color, crop):
+    def step(self, action, color, crop, domain):
         total_reward = 0
         for i in range(args.action_repeat):
             img_rgb, reward, done, die = self.env.step(action)
             total_reward += reward
             if done:
                 break
-        obs = self.process_state(img_rgb, color, crop)
+        obs = self.process_state(img_rgb, color, crop, domain)
         self.stack.pop(0)
         self.stack.append(obs)
         assert len(self.stack) == self.img_stack
@@ -144,35 +144,67 @@ def create_img_scm():
     return scm
 
 def create_img_encoder_decoder():
-    encoder = ImageEncoder(
-            in_resolution=64,
-            in_features=3,
-            out_features=32,
-            hidden_features=32,
-            batchnorm=False,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            min_std=1.e-3,
-            permutation=0,
-            )
-    decoder = ImageDecoder(
-            in_features=32,
-            out_resolution=64,
-            out_features=3,
-            hidden_features=32,
-            batchnorm=False,
-            min_std=1.0,
-            fix_std=True,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            permutation=0,
-            )
+    if args.ilcm_encoder_type == 'resnet':
+        encoder = ImageEncoder(
+                in_resolution=64,
+                in_features=3,
+                out_features=32,
+                hidden_features=32,
+                batchnorm=False,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                min_std=1.e-3,
+                permutation=0,
+                )
+        decoder = ImageDecoder(
+                in_features=32,
+                out_resolution=64,
+                out_features=3,
+                hidden_features=32,
+                batchnorm=False,
+                min_std=1.0,
+                fix_std=True,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                permutation=0,
+                )
+    elif args.ilcm_encoder_type == 'conv':
+        encoder = Encoder3dshapes(
+                in_resolution=64,
+                in_features=3,
+                out_features=32,
+                hidden_features=32,
+                batchnorm=False,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                min_std=1.e-3,
+                permutation=0,
+                )
+        decoder = Decoder3dshapes(
+                in_features=32,
+                out_resolution=64,
+                out_features=3,
+                hidden_features=32,
+                batchnorm=False,
+                min_std=1.0,
+                fix_std=True,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                permutation=0,
+                )
+        
     return encoder, decoder
 
 def create_ilcm():
@@ -274,7 +306,7 @@ class Agent(nn.Module):
         self.input_dim = input_dim
         self.train_encoder = train_encoder
         if self.train_encoder == True:
-            self.encoder = EncoderBase(num_channels=3)
+            self.encoder = EncoderBase(num_channels=12)
             self.input_dim=self.encoder.out_dim
 
         conv_seqs = [
@@ -328,6 +360,7 @@ def main():
         # env setup
     encoder = None
     main = None
+    train_encoder = False
     if args.use_encoder:
         if args.repr == 'cycle_vae' or args.repr == 'vae' or args.repr == 'adagvae':
             encoder = Encoder(latent_size = args.latent_size)
@@ -357,7 +390,7 @@ def main():
             main.load_state_dict(weights)
             print("Loaded Weights Causal")
         elif args.repr == 'disent':
-            class_latent_size = 16
+            class_latent_size = 8
             content_latent_size = 32
             encoder = EncoderD(class_latent_size, content_latent_size)
             weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
@@ -371,7 +404,9 @@ def main():
     action_space = env.action_space.shape
     observation_space = env.observation_space.shape
 
-    model = Agent(input_dim=args.latent_size*args.img_stack).to(device)
+    if encoder == None:
+        train_encoder = True
+    model = Agent(input_dim=args.latent_size*args.img_stack, train_encoder=train_encoder).to(device)
     weights = torch.load(args.model_path, map_location=torch.device('cpu'))
     model.load_state_dict(weights)
     print("Loaded Weights Policy")
@@ -384,20 +419,20 @@ def main():
         if domain == 0:
             color = None
         elif domain == args.nb_domain - 1:
-            crop = True
+            color = 0.5
         elif domain == args.nb_domain - 2:
             color = -0.2
         else:
-            color = 0.3
+            color = -0.3
         print(color, crop)
         results = []
         for i in range(args.num_episodes):
-            episode_reward, done, new_obs = 0, False, env.reset(color, crop)
+            episode_reward, done, new_obs = 0, False, env.reset(color, crop, domain)
             #video.init(enabled=((i == 0) or (i == 99)))
             while not done:
                 obs = torch.from_numpy(new_obs).to(device).float().unsqueeze(0)
                 action = model.get_action_and_value(obs)
-                obs, reward, done, die = env.step(action, color, crop)
+                obs, reward, done, die = env.step(action, color, crop, domain)
                 new_obs = obs
                 episode_reward += reward
                 #video.record(env)
@@ -408,7 +443,7 @@ def main():
         print(results)
         domains_results.append(results)
         domains_means.append(np.mean(results))
-    with open(os.path.join(args.save_path, 'results_%s.txt' % args.repr), 'w') as f:
+    with open(os.path.join(args.save_path, 'results_%s_%d.txt' % (args.repr, args.number)), 'w') as f:
         f.write('score = %s\n' % domains_results)
         f.write('mean_scores = %s\n' % domains_means)
         f.write('model = %s\n' % args.model_path)
