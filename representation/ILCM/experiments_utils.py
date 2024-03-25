@@ -167,6 +167,76 @@ def save_model(log_dir, model, filename="model.pt"):
     logger.debug(f"Saving model at {path}")
     torch.save(model.state_dict(), path)
 
+def compute_metrics_on_dataset_causalcircuit(cfg, model, criteria, data_loader, device):
+    """Computes metrics on a full dataset"""
+    # At test time, always use the canonical manifold thickness
+    model.eval()
+    set_manifold_thickness(cfg, model, None)
+
+    nll, samples = 0.0, 0
+    loss = 0.0
+    metrics = None
+    batches = 0
+
+    # Loop over batches
+    for x1, x2, z1, z2, intervention_labels, true_interventions, *_ in data_loader:
+        batches += 1
+
+        x1, x2, z1, z2, intervention_labels, true_interventions = (
+            x1.to(device),
+            x2.to(device),
+            z1.to(device),
+            z2.to(device),
+            intervention_labels.to(device),
+            true_interventions.to(device),
+        )
+        log_prob, model_outputs = model(
+            x1,
+            x2,
+            beta=cfg.eval.beta,
+            full_likelihood=cfg.eval.full_likelihood,
+            likelihood_reduction=cfg.eval.likelihood_reduction,
+            graph_mode=cfg.eval.graph_sampling.mode,
+            graph_temperature=cfg.eval.graph_sampling.temperature,
+            graph_samples=cfg.eval.graph_sampling.samples,
+        )
+
+        batch_loss, batch_metrics = criteria(
+            log_prob,
+            true_interventions=true_interventions,
+            true_intervention_labels=intervention_labels,
+            **model_outputs,
+        )
+        batch_log_likelihood = torch.mean(
+            model.log_likelihood(
+                x1,
+                x2,
+                n_latent_samples=cfg.training.iwae_samples,
+                beta=cfg.eval.beta,
+                full_likelihood=cfg.eval.full_likelihood,
+                likelihood_reduction=cfg.eval.likelihood_reduction,
+                graph_mode=cfg.eval.graph_sampling.mode,
+                graph_temperature=cfg.eval.graph_sampling.temperature,
+                graph_samples=cfg.eval.graph_sampling.samples,
+            )
+        ).item()
+
+        # Tally up metrics
+        loss += batch_loss
+        if metrics is None:
+            metrics = batch_metrics
+        else:
+            for key, val in metrics.items():
+                metrics[key] += batch_metrics[key]
+        nll -= batch_log_likelihood
+
+    # Average over batches
+    loss /= batches
+    for key, val in metrics.items():
+        metrics[key] = val / batches
+    metrics["nll"] = nll / batches
+
+    return loss, nll, metrics
 
 def compute_metrics_on_dataset(cfg, model, criteria, inputs, device):
     """Computes metrics on a full dataset"""

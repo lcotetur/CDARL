@@ -41,7 +41,7 @@ from model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
 from model import ImageEncoderCarla, ImageDecoderCarla, BasicEncoderCarla, BasicDecoderCarla, CoordConv2d
 from training import VAEMetrics
 
-@hydra.main(version_base=None, config_path="config", config_name="reduce_dim_ilcm")
+@hydra.main(version_base=None, config_path="config", config_name="reduce_dim_ilcm_carla")
 def main(cfg):
     """High-level experiment function"""
     log_dir = os.path.join(cfg.data.save_path, str(date.today()) + f'_{cfg.general.seed}')
@@ -57,14 +57,34 @@ def main(cfg):
 
     # Train
     model = create_model(cfg)
+    load_checkpoint(cfg, model)
     train(cfg, model, results, log_dir)
-    save_model(log_dir, model)
+    #save_model(log_dir, model)
+    save_representations(cfg, log_dir, model)
 
     # Save results
     results.save_logs(cfg.data.save_path, str(date.today()))
     results.generate_plot(log_dir, log_dir)
 
     logger.info("Anders nog iets?")
+
+def load_checkpoint(cfg, model):
+    """Loads a model checkpoint"""
+    if "load" not in cfg.model or cfg.model.load is None or cfg.model.load == "None":
+        return
+
+    filename = cfg.model.load
+    logger.info(f"Loading model checkpoint from {filename}")
+
+    state_dict = torch.load(filename, map_location="cpu")
+    try:
+        model.load_state_dict(state_dict)
+        print('loaded state dict')
+
+    # Loading pretrained ILCM for beta-VAE model
+    except RuntimeError:
+        truncate_state_dict_for_baseline(cfg, state_dict)
+        model.load_state_dict(state_dict)
 
 def create_model(cfg):
     """Instantiates a (learnable) VAE model"""
@@ -316,7 +336,7 @@ def train(cfg, model, results, log_dir):
                     with torch.no_grad():
                         recon1 = model.encode_decode(imgs1)
                     saved_imgs = torch.cat([imgs1, recon1], dim=0)
-                    # save images
+                        # save images
                     path_image = os.path.join(log_dir, f'recon_{step}.png')
                     save_image(saved_imgs, path_image, nrow=10)
 
@@ -345,6 +365,64 @@ def train(cfg, model, results, log_dir):
     set_manifold_thickness(cfg, model, None)
 
     return train_metrics
+
+@torch.no_grad()
+def save_representations(cfg, log_dir, model):
+    """Reduces dimensionality for full dataset by pushing images through encoder"""
+    print("Encoding full datasets and storing representations")
+
+    device = torch.device(cfg.training.device)
+    model.to(device)
+
+    for partition in ["train", "test", "val"]:
+        transform = transforms.Compose([transforms.ToTensor()])
+        if partition == 'train':
+            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+            dataloader = get_dataloader(cfg, dataset)
+        elif partition == 'test':
+            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+            dataloader = get_dataloader(cfg, dataset)
+        elif partition == 'val':
+            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+            dataloader = get_dataloader(cfg, dataset)
+
+        z0s, z1s = [], []
+
+        for i_split in range(cfg.data.num_splitted):
+            for imgs in dataloader:
+                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
+
+                imgs_content = imgs.permute(1,0,2,3,4).repeat(2, 1, 1, 1, 1)
+                m = int(imgs_content.shape[0]/2)
+                imgs_content1 = imgs_content[:m, :, :, :, :]
+                imgs_content2 = imgs_content[:m, :, :, :, :]
+                imgs_content1 = imgs_content1[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]].view(imgs_content1.size())
+                imgs_content2 = imgs_content2[[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]].view(imgs_content2.size())
+
+                imgs_content1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
+                imgs_content2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
+
+                x0 = imgs_content1
+                x1 = imgs_content2
+
+                x0, x1 = x0.to(device), x1.to(device)
+
+                _, _, z0, z1, *_ = model.encode_decode_pair(x0, x1)
+
+                z0s.append(z0)
+                z1s.append(z1)
+
+        z0s = torch.cat(z0s, dim=0)
+        z1s = torch.cat(z1s, dim=0)
+
+        data = (
+            z0s,
+            z1s,
+        )
+
+        filename = Path(log_dir).resolve() / f"{partition}_carla_encoded.pt"
+        logger.info(f"Storing encoded {partition} data at {filename}")
+        torch.save(data, filename)
 
 
 def get_dataloader(cfg, dataset):

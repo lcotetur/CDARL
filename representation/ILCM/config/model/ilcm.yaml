@@ -1,5 +1,5 @@
 type: intervention_noise_vae
-dim_x: ${data.dim_z}
+dim_x: 16
 dim_z: 6
 overwrite_latents: false
 

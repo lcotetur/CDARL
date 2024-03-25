@@ -41,7 +41,7 @@ from model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
 from model import ImageEncoder, ImageDecoder, CoordConv2d, Encoder3dshapes, Decoder3dshapes
 from training import VAEMetrics
 
-@hydra.main(version_base=None, config_path="config", config_name="reduce_dim_ilcm")
+@hydra.main(version_base=None, config_path="config", config_name="reduce_dim_ilcm_carracing")
 def main(cfg):
     """High-level experiment function"""
     log_dir = os.path.join(cfg.data.save_path, str(date.today()))
@@ -59,6 +59,7 @@ def main(cfg):
     model = create_model(cfg)
     train(cfg, model, results, log_dir)
     save_model(log_dir, model)
+    save_representations(cfg, model)
 
     # Save results
     results.save_logs(cfg.data.save_path, str(date.today()))
@@ -81,7 +82,7 @@ def create_model(cfg):
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy=cfg.model.averaging_strategy,
-            dim_z=cfg.model.dim_z,
+            dim_z=cfg.data.model.dim_z,
             )
 
     return model
@@ -97,7 +98,7 @@ def create_scm(cfg):
             hidden_units=cfg.model.scm.hidden_units,
             hidden_layers=cfg.model.scm.hidden_layers,
             homoskedastic=cfg.model.scm.homoskedastic,
-            dim_z=cfg.model.dim_z,
+            dim_z=cfg.data.model.dim_z,
             min_std=cfg.model.scm.min_std,
         )
 
@@ -111,7 +112,7 @@ def create_encoder_decoder(cfg):
         encoder = ImageEncoder(
                 in_resolution=cfg.model.dim_x[2],
                 in_features=cfg.model.dim_x[0],
-                out_features=cfg.model.dim_z,
+                out_features=cfg.data.model.dim_z,
                 hidden_features=cfg.model.encoder.hidden_channels,
                 batchnorm=cfg.model.encoder.batchnorm,
                 conv_class=CoordConv2d if cfg.model.encoder.coordinate_embeddings else torch.nn.Conv2d,
@@ -123,7 +124,7 @@ def create_encoder_decoder(cfg):
                 permutation=cfg.model.encoder.permutation,
                 )
         decoder = ImageDecoder(
-                in_features=cfg.model.dim_z,
+                in_features=cfg.data.model.dim_z,
                 out_resolution=cfg.model.dim_x[2],
                 out_features=cfg.model.dim_x[0],
                 hidden_features=cfg.model.decoder.hidden_channels,
@@ -142,7 +143,7 @@ def create_encoder_decoder(cfg):
         encoder = Encoder3dshapes(
                 in_resolution=cfg.model.dim_x[2],
                 in_features=cfg.model.dim_x[0],
-                out_features=cfg.model.dim_z,
+                out_features=cfg.data.model.dim_z,
                 hidden_features=cfg.model.encoder.hidden_channels,
                 batchnorm=cfg.model.encoder.batchnorm,
                 conv_class=CoordConv2d if cfg.model.encoder.coordinate_embeddings else torch.nn.Conv2d,
@@ -154,7 +155,7 @@ def create_encoder_decoder(cfg):
                 permutation=cfg.model.encoder.permutation,
                 )
         decoder = Decoder3dshapes(
-                in_features=cfg.model.dim_z,
+                in_features=cfg.data.model.dim_z,
                 out_resolution=cfg.model.dim_x[2],
                 out_features=cfg.model.dim_x[0],
                 hidden_features=cfg.model.decoder.hidden_channels,
@@ -225,20 +226,67 @@ def train(cfg, model, results, log_dir):
 
                 fractional_epoch = step / steps_per_epoch
 
-                #content
-                imgs = imgs.to(device, non_blocking=True)
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs = imgs.repeat(2, 1, 1, 1)
-
-                imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
-                imgs = imgs.permute(1,0,2,3,4)
-                m = int(imgs.shape[0]/2)
-                feature_1 = imgs[:m]
-                x1 = feature_1.reshape(-1, *imgs.shape[2:])
-                feature_2 = imgs[m:]
-                x2 = feature_2.reshape(-1, *imgs.shape[2:])
+                
 
                 #style
+                if cfg.data.training.intervention == 'style':
+                    if cfg.data.training.number_domains == 10:
+                        imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)               
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+                        x1 = imgs[0]
+                        x2 = imgs[1]
+                    elif cfg.data.training.number_domains == 2: 
+                        imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)  
+                        imgs = imgs[2:3, :, :, :, :]
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+                        x1 = imgs[0]
+                        x2 = imgs[1]
+                    elif cfg.data.training.number_domains == 5:
+                        imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)  
+                        imgs = imgs[0:3, :, :, :, :]
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.1])
+                        x1 = imgs[0]
+                        x2 = imgs[1]
+
+                if cfg.data.training.intervention == 'content':
+                    if cfg.data.training.number_domains == 10:
+                        imgs = imgs.to(device, non_blocking=True)
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+                        imgs = imgs.permute(1,0,2,3,4)
+                        m = int(imgs.shape[0]/2)
+                        feature_1 = imgs[:m]
+                        x1 = feature_1.reshape(-1, *imgs.shape[2:])
+                        feature_2 = imgs[m:]
+                        x2 = feature_2.reshape(-1, *imgs.shape[2:])
+                    elif cfg.data.training.number_domains == 2: 
+                        imgs = imgs.to(device, non_blocking=True)
+                        imgs = imgs[2:3, :, :, :, :]
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+                        imgs = imgs.permute(1,0,2,3,4)
+                        m = int(imgs.shape[0]/2)
+                        feature_1 = imgs[:m]
+                        x1 = feature_1.reshape(-1, *imgs.shape[2:])
+                        feature_2 = imgs[m:]
+                        x2 = feature_2.reshape(-1, *imgs.shape[2:])
+                    elif cfg.data.training.number_domains == 5:
+                        imgs = imgs.to(device, non_blocking=True)
+                        m = int(imgs.shape[0]/2)
+                        feature_1 = imgs[:m]
+                        x1 = feature_C1.reshape(-1, *imgs.shape[2:])
+                        feature_2 = imgs[m:]
+                        x2 = feature_2.reshape(-1, *imgs.shape[2:])
+                    
+
                 """
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)               
                 imgs = imgs.reshape(-1, *imgs.shape[2:])
@@ -252,6 +300,7 @@ def train(cfg, model, results, log_dir):
                 x1 = imgs[0]
                 x2 = imgs[1]
                 """
+
                 save_image(torch.cat([x1, x2], dim=0), os.path.join(log_dir,'features.png'), nrow=10)
 
                 model.train()
@@ -320,7 +369,7 @@ def train(cfg, model, results, log_dir):
                     save_image(saved_imgs, path_image, nrow=10)
                     # save metrics
                     results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
-                    results.save_logs(cfg.data.save_path, str(date.today()) + f'_{cfg.general.seed}')
+                    results.save_logs(log_dir)
                     results.generate_plot(log_dir,log_dir)
                     with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
                         json.dump(metrics, f)
@@ -358,48 +407,117 @@ def updateloader(cfg, loader, dataset):
     loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.data.num_workers)
     return loader
 
-def get_dataloader_test(cfg, tag, batchsize=cfg.data.training.batchsize, shuffle=True):
-    """Load data from disk and return DataLoader instance"""
-    logger.debug(f"Loading data from {cfg.data.data_dir}")
-    assert tag in {"train", "test", "val"}
-    if tag == "train":
-        filenames = [Path(cfg.data.data_dir) / f"car{j}" / f"{i}.npz" for j in range(1, 6) for i in range(10)]
-        print(filenames)
-    elif tag == "test":
-        filenames = [Path(cfg.data.data_dir) / "car1" / f"{i}.npz" for i in range(10)]
-    elif tag == "val":
-        filenames = [Path(cfg.data.data_dir) / "car5" / f"{i}.npz" for i in range(10)]
+@torch.no_grad()
+def save_representations(cfg, model):
+    """Reduces dimensionality for full dataset by pushing images through encoder"""
+    print("Encoding full datasets and storing representations")
 
-    data = []
-    for filename in filenames:
-        assert filename.exists(), f"Dataset not found at {filename}. Consult README.md."
-        np.load(filename)['obs']
-        data.append(frames)
+    device = torch.device(cfg.training.device)
+    model.to(device)
 
-    logger.debug(f"Finished loading data from {cfg.data.data_dir}")
+    for partition in ["train", "test", "val"]:
+        transform = transforms.Compose([transforms.ToTensor()])
+        if partition == 'train':
+            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, 1, transform)
+            dataloader = get_dataloader(cfg, dataset)
+        elif partition == 'test':
+            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, 1, transform)
+            dataloader = get_dataloader(cfg, dataset)
+        elif partition == 'val':
+            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, 1, transform)
+            dataloader = get_dataloader(cfg, dataset)
 
-    transform = transforms.Compose([transforms.ToTensor()])
-    dataset = CarracingDataset(data, transform)
+        z0s, z1s = [], []
 
-    batchsize = len(dataset) if batchsize is None else batchsize
-    dataloader = DataLoader(dataset, batch_size=batchsize, shuffle=shuffle)
+        for i_split in range(1):
+            for imgs in dataloader:
 
-    return dataloader
+                if cfg.data.training.intervention == 'style':
+                    if cfg.data.training.number_domains == 10:
+                        imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)               
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+                        x0 = imgs[0]
+                        x1 = imgs[1]
+                    elif cfg.data.training.number_domains == 2: 
+                        imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)  
+                        imgs = imgs[2:3, :, :, :, :]
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+                        x0 = imgs[0]
+                        x1 = imgs[1]
+                    elif cfg.data.training.number_domains == 5:
+                        imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)  
+                        imgs = imgs[0:3, :, :, :, :]
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.1])
+                        x0 = imgs[0]
+                        x1 = imgs[1]
+                elif cfg.data.training.intervention == 'content':
+                    if cfg.data.training.number_domains == 10:
+                        imgs = imgs.to(device, non_blocking=True)
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+                        imgs = imgs.permute(1,0,2,3,4)
+                        m = int(imgs.shape[0]/2)
+                        feature_1 = imgs[:m]
+                        x0 = feature_1.reshape(-1, *imgs.shape[2:])
+                        feature_2 = imgs[m:]
+                        x1 = feature_2.reshape(-1, *imgs.shape[2:])
+                    elif cfg.data.training.number_domains == 2: 
+                        imgs = imgs.to(device, non_blocking=True)
+                        imgs = imgs[2:3, :, :, :, :]
+                        imgs = imgs.reshape(-1, *imgs.shape[2:])
+                        imgs = imgs.repeat(2, 1, 1, 1)
+                        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+                        imgs = imgs.permute(1,0,2,3,4)
+                        m = int(imgs.shape[0]/2)
+                        feature_1 = imgs[:m]
+                        x0 = feature_1.reshape(-1, *imgs.shape[2:])
+                        feature_2 = imgs[m:]
+                        x1 = feature_2.reshape(-1, *imgs.shape[2:])
+                    elif cfg.data.training.number_domains == 5:
+                        imgs = imgs.to(device, non_blocking=True)
+                        m = int(imgs.shape[0]/2)
+                        feature_1 = imgs[:m]
+                        x0 = feature_C1.reshape(-1, *imgs.shape[2:])
+                        feature_2 = imgs[m:]
+                        x1 = feature_2.reshape(-1, *imgs.shape[2:])
+                """
+                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)               
+                imgs = imgs.reshape(-1, *imgs.shape[2:])
+                imgs = imgs.repeat(2, 1, 1, 1)
 
-class CarracingDataset(Dataset):
-    """CausalCircuit dataset"""
+                if cfg.data.training.random_augmentations == True:
+                    imgs = RandomTransform(imgs).apply_random_transformations(nb_class=2, random_crop=False)
+                else:
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+                        
+                x0 = imgs[0]
+                x1 = imgs[1]
+                """
+                x0, x1 = x0.to(device), x1.to(device)
 
-    def __init__(self, data, transform):
-        self.data = data
+                _, _, z0, z1, *_ = model.encode_decode_pair(x0, x1)
 
-    def __len__(self):
-        assert(len(self.data) > 0)
-        return self.data[0].shape[0]
+                z0s.append(z0)
+                z1s.append(z1)
 
-    def __getitem__(self, index):
-        if torch.is_tensor(index):
-            index = index.tolist()
-        return torch.stack([self.transform(d[index]) for d in self.data])
+        z0s = torch.cat(z0s, dim=0)
+        z1s = torch.cat(z1s, dim=0)
+
+        data = (
+            z0s,
+            z1s,
+        )
+
+        filename = Path(log_dir).resolve() / f"{partition}_carracing_encoded.pt"
+        logger.info(f"Storing encoded {partition} data at {filename}")
+        torch.save(data, filename)
 
 def epoch_schedules(cfg, model, epoch, optim):
     """Epoch-based schedulers"""

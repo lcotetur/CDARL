@@ -22,6 +22,7 @@ parser.add_argument('--data-tag', default='car', type=str, help='files with data
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carracing", type=str)
 parser.add_argument('--batch-size', default=10, type=int)
+parser.add_argument('--number-domains', default=2, type=int)
 parser.add_argument('--num-epochs', default=2, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--learning-rate', default=0.0001, type=float)
@@ -74,17 +75,18 @@ def main(args):
                 batch_count += 1
                 # forward circle
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
-                '''
-                if args.stack_frames:
-                    imgs = imgs.repeat(1, 1, args.img_stack, 1, 1)
-                    if args.random_augmentations:
-                        imgs = imgs.reshape(-1, *imgs.shape[2:])
-                        imgs = RandomTransform(imgs).apply_random_transformations_stack(num_frames=args.img_stack, nb_class=5, value=0.3)
-                else:
-                '''
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs = imgs.repeat(2, 1, 1, 1)
-                imgs = RandomTransform(imgs).apply_transformations(nb_class=10, value=[0, 0, 0, 0, 0, 0.1, 0.1, 0.1, 0.1, 0.1])
+
+                if args.number_domains == 10:
+                    imgs = imgs.reshape(-1, *imgs.shape[2:])
+                    imgs = imgs.repeat(2, 1, 1, 1)
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=10, value=[0, 0, 0, 0, 0, 0.1, 0.1, 0.1, 0.1, 0.1])
+                elif args.number_domains == 2: 
+                    imgs = imgs[2:3, :, :, :, :]
+                    imgs = imgs.reshape(-1, *imgs.shape[2:])
+                    imgs = imgs.repeat(2, 1, 1, 1)
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+                elif agrs.number_domains == None and args.random_augmentations:
+                    imgs = RandomTransform(imgs).apply_random_transformations_stack(num_frames=args.img_stack, nb_class=5, value=0.3)
                         
                 optimizer.zero_grad()
 
@@ -120,14 +122,9 @@ def main(args):
 
                     saved_imgs = torch.cat([imgs1, imgs2, recon_imgs1, recon_combined], dim=0)
 
-                    if args.stack_frames:
-                        save_image(saved_imgs[:, :3, :, :], os.path.join(log_dir,'stack_%d_%d_%d.png' % (i_epoch, i_split, i_batch)), nrow=9)
-                        torch.save(model.state_dict(), os.path.join(log_dir, "model_cycle_vae_stack.pt"))
-                        torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_cycle_vae_stack.pt"))
-                    else:
-                        save_image(saved_imgs, os.path.join(log_dir,'%d_%d_%d.png' % (i_epoch, i_split, i_batch)), nrow=9)
-                        torch.save(model.state_dict(), os.path.join(log_dir, "model_cycle_vae.pt"))
-                        torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_cycle_vae.pt"))
+                    save_image(saved_imgs, os.path.join(log_dir,'%d_%d_%d.png' % (i_epoch, i_split, i_batch)), nrow=9)
+                    torch.save(model.state_dict(), os.path.join(log_dir, "model_cycle_vae.pt"))
+                    torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_cycle_vae.pt"))
 
             # load next splitted data
             loader = updateloader(args, loader, dataset)

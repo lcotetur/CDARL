@@ -1,7 +1,7 @@
 import torch
 from torch import optim
 from torch.nn import functional as F
-from torch.utils.tensorboard import SummaryWriter
+#from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
@@ -29,9 +29,9 @@ parser.add_argument('--beta', default=10, type=int)
 parser.add_argument('--save-freq', default=19000, type=int)
 parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--bloss-coef', default=1, type=int)
-parser.add_argument('--latent-size', default=32, type=int)
+parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--flatten-size', default=9216, type=int)
-parser.add_argument('--random-augmentations', default=True, type=bool)
+parser.add_argument('--random-augmentations', default=False, type=bool)
 parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
 parser.add_argument('--verbose', default=True, type=bool)
 args = parser.parse_args()

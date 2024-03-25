@@ -1,9 +1,9 @@
 exp_name: ???
 run_name: null
 
-save_path: /home/mila/l/lea.cote-turcotte/CDARL/ILCM/logs
-base_dir: /home/mila/l/lea.cote-turcotte/CDARL/ILCM
-exp_dir: /home/mila/l/lea.cote-turcotte/CDARL/ILCM
+save_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/logs
+base_dir: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM
+exp_dir: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM
 overwrite_existing: true
 
 debug: false

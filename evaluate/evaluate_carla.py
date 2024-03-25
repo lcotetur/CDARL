@@ -16,19 +16,21 @@ from rlcodebase.utils import Config, Logger
 from CDARL.utils import seed_everything, create_logs 
 from CDARL.model import CarlaLatentPolicy, CarlaImgPolicy
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, CoordConv2d, GaussianEncoder
+from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, CoordConv2d, GaussianEncoder, BasicEncoderCarla, BasicDecoderCarla
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--weather', default=0, type=int)
+parser.add_argument('--weather', default=1, type=int)
 parser.add_argument('--action-repeat', default=1, type=int)
 parser.add_argument('--algo', default='ilcm', type=str)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/carla_logs/ilcm/2024-02-17_0/200000-model.pt', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/carla_logs/ilcm/2024-03-22_0/200000-model.pt', type=str)
 parser.add_argument('--use-encoder', default=True, action='store_true')
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-14_1_reduce_dim/model_step_50000.pt', type=str) 
-parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-15/model_step_50000.pt', type=str)
-parser.add_argument('--latent-size', default=16, type=int, help='dimension of latent state embedding')
+parser.add_argument('--encoder-path', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_1/model.pt", type=str) 
+parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_ilcm/model.pt', type=str)
+parser.add_argument('--ilcm-encoder', default='conv', type=str)
+parser.add_argument('--latent_size', default=10, type=int, help='dimension of latent state embedding')
+parser.add_argument('--reduce_dim_latent_size', default=16, type=int)
 parser.add_argument('--port', default=2000, type=int)
-parser.add_argument('--num-eval', default=10, type=int)
+parser.add_argument('--num-eval', default=20, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results/carla', type=str)
 parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--save-obs', default=False, action='store_true')
@@ -72,18 +74,21 @@ params = {
     'start_point': start_point,
     'end_point': end_point,
     'weather': weather,
-    'ip': 'localhost'
+    'ip': 'localhost',
+    'seed': args.seed
 }
 
 class VecGymCarla:
     def __init__(self, env, action_repeat, encoder=None, causal=None):
         self.env = env
+        self.env.seed(args.seed)
         self.action_repeat = action_repeat
         self.encoder = encoder
         self.causal = causal
         self.action_space = self.env.action_space
+        print(self.action_space)
         if self.encoder:
-            self.observation_space = spaces.Box(low=-1000, high=1000, shape=(16+1,), dtype=np.float)
+            self.observation_space = spaces.Box(low=-1000, high=1000, shape=(args.latent_size+1,), dtype=np.float)
         else:
             self.observation_space = spaces.Box(low=0, high=255, shape=(3*128*128+1,), dtype=np.uint8)
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -127,7 +132,7 @@ class VecGymCarla:
         else:
             obs = np.transpose(s['camera'], (2,0,1))
             obs = np.expand_dims(obs, axis=0)
-            save_image(torch.tensor(obs)/255, os.path.join('/home/mila/l/lea.cote-turcotte/CDARL/checkimages', "%s.png" % weathers[args.weather]))
+            save_image(torch.tensor(obs)/255, os.path.join('/home/mila/l/lea.cote-turcotte/CDARL/checkimages', "domain_carla_%s.png" % args.weather))
             obs = torch.from_numpy(obs).float().to(self.device)
             if args.algo == 'cycle_vae' or args.algo == 'vae' or args.algo == 'adagvae':
                 with torch.no_grad():
@@ -160,7 +165,7 @@ def create_model_reduce_dim():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=32,
+            dim_z=args.reduce_dim_latent_size,
             )
     return model
 
@@ -171,43 +176,75 @@ def create_img_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=32,
+            dim_z=args.reduce_dim_latent_size,
             min_std=0.2,
         )
 
     return scm
 
 def create_img_encoder_decoder():
-    encoder = ImageEncoderCarla(
-            in_resolution=128,
-            in_features=3,
-            out_features=32,
-            hidden_features=32,
-            batchnorm=False,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            min_std=1.e-3,
-            permutation=0,
-            )
-    decoder = ImageDecoderCarla(
-            in_features=32,
-            out_resolution=128,
-            out_features=3,
-            hidden_features=32,
-            batchnorm=False,
-            min_std=1.0,
-            fix_std=True,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            permutation=0,
-            )
+    if args.ilcm_encoder == 'resnet':
+        encoder = ImageEncoderCarla(
+                in_resolution=128,
+                in_features=3,
+                out_features=8,
+                hidden_features=32,
+                batchnorm=False,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                min_std=1.e-3,
+                permutation=0,
+                )
+        decoder = ImageDecoderCarla(
+                in_features=8,
+                out_resolution=128,
+                out_features=3,
+                hidden_features=32,
+                batchnorm=False,
+                min_std=1.0,
+                fix_std=True,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                permutation=0,
+                )
+    elif args.ilcm_encoder == 'conv':
+        encoder = BasicEncoderCarla(
+                in_resolution=128,
+                in_features=3,
+                out_features=args.reduce_dim_latent_size,
+                hidden_features=32,
+                batchnorm=False,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                min_std=1.e-3,
+                permutation=0,
+                )
+        decoder = BasicDecoderCarla(
+                in_features=args.reduce_dim_latent_size,
+                out_resolution=128,
+                out_features=3,
+                hidden_features=32,
+                batchnorm=False,
+                min_std=1.0,
+                fix_std=True,
+                conv_class=CoordConv2d,
+                mlp_layers=2,
+                mlp_hidden=128,
+                elementwise_hidden=16,
+                elementwise_layers=0,
+                permutation=0,
+                )
     return encoder, decoder
+
 
 def create_ilcm():
     """Instantiates a (learnable) VAE model"""
@@ -222,7 +259,7 @@ def create_ilcm():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=16,
+            dim_z=args.latent_size,
             )
 
     return model
@@ -241,16 +278,16 @@ def create_mlp_encoder_decoder():
 
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
-                input_features=32,
-                output_features=16,
+                input_features=args.reduce_dim_latent_size,
+                output_features=args.latent_size,
                 fix_std=False,
                 init_std=0.01,
                 min_std=0.0001,
             )
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
-                input_features=16,
-                output_features=32,
+                input_features=args.latent_size,
+                output_features=args.reduce_dim_latent_size,
                 fix_std=True,
                 init_std=1.0,
                 min_std=0.001,
@@ -267,7 +304,7 @@ def create_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=16,
+            dim_z=args.latent_size,
             min_std=0.2,
         )
     return scm
@@ -305,14 +342,14 @@ class EncoderD(nn.Module):
             nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
         )
 
-        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
-        self.linear_logsigma = nn.Linear(flatten_size, content_latent_size)
-        self.linear_classcode = nn.Linear(flatten_size, class_latent_size) 
+        self.linear_mu = nn.Linear(9216, content_latent_size)
+        self.linear_logsigma = nn.Linear(9216, content_latent_size)
+        self.linear_classcode = nn.Linear(9216, class_latent_size) 
 
     def forward(self, x):
-        x = self.main(x)
+        x = self.main(x/255)
         x = x.view(x.size(0), -1)
-        mu = self.linear_mu(x/255)
+        mu = self.linear_mu(x)
         logsigma = self.linear_logsigma(x)
         classcode = self.linear_classcode(x)
 
@@ -355,8 +392,8 @@ def main():
             main.load_state_dict(weights)
             print("Loaded Weights Main")
         elif args.algo == 'disent':
-            class_latent_size = 16
-            content_latent_size = 32
+            class_latent_size = 8
+            content_latent_size = 16
             encoder = EncoderD(class_latent_size, content_latent_size)
             weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
             for k in list(weights.keys()):
@@ -372,19 +409,19 @@ def main():
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     if args.use_encoder:
         Model = CarlaLatentPolicy
-        input_dim = args.latent_size+1  # 16+1 in paper
+        input_dim = args.latent_size+1#args.latent_size+1  # 16+1 in paper
     else:
         Model = CarlaImgPolicy
         input_dim = args.latent_size+1  # 128+1 in paper (16 is too small)
     model = Model(input_dim, 2)
-    model.load_state_dict(torch.load(args.model_path, map_location=torch.device('cuda')))
+    model.load_state_dict(torch.load(args.model_path, map_location=torch.device('cpu')))
     model = model.to(device)
 
     res = []
     state = env.reset()
     while(len(res) < args.num_eval):
         action, _, _, _ = model(torch.from_numpy(state).float().to(device))
-        state, _, done, info = env.step(action.cpu().numpy())
+        state, _, done, info = env.step(action.detach().cpu().numpy())
         for i in info:
             if i['episodic_return'] is not None:
                 res.append(i['episodic_return'])

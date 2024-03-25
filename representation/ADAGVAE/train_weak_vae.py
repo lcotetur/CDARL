@@ -22,6 +22,7 @@ parser.add_argument('--data-tag', default='car', type=str, help='files with data
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carracing", type=str)
 parser.add_argument('--batch-size', default=10, type=int)
+parser.add_argument('--number-domains', default=5, type=int)
 parser.add_argument('--num-epochs', default=2, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 parser.add_argument('--learning-rate', default=0.0001, type=float)
@@ -73,29 +74,62 @@ def main():
             for i_batch, imgs in enumerate(loader):
                 batch_count += 1
 
-                #style interventions
+                if args.number_domains == 10:
+                    imgs = imgs.to(device, non_blocking=True)
+                    imgs = imgs.reshape(-1, *imgs.shape[2:])
+                    imgs = imgs.repeat(2, 1, 1, 1)
+
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+                    imgs = imgs.permute(1,0,2,3,4)
+                    feature_1 = imgs[:25]
+                    feature_1 = feature_1.reshape(-1, *imgs.shape[2:])
+                    feature_2 = imgs[25:]
+                    feature_2 = feature_2.reshape(-1, *imgs.shape[2:])
+
+                elif args.number_domains == 2: 
+                    print('2 domains')
+                    imgs = imgs.to(device, non_blocking=True)
+                    imgs = imgs[:, 2:3, :, :, :]
+                    imgs = imgs.reshape(-1, *imgs.shape[2:])
+                    imgs = imgs.repeat(2, 1, 1, 1)
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+                    imgs = imgs.permute(1,0,2,3,4)
+                    feature_1 = imgs[:5]
+                    feature_1 = feature_1.reshape(-1, *imgs.shape[2:])
+                    feature_2 = imgs[5:]
+                    feature_2 = feature_2.reshape(-1, *imgs.shape[2:])
+
+                elif args.number_domains == 5:
+                    imgs = imgs.to(device, non_blocking=True)
+                    feature_1 = imgs[:5]
+                    feature_1 = feature_1.reshape(-1, *imgs.shape[2:])
+                    feature_2 = imgs[5:]
+                    feature_2 = feature_2.reshape(-1, *imgs.shape[2:])
                 """
-                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs = imgs.repeat(2, 1, 1, 1)
+                # both interventions
+                imgsS = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
+                imgsS = imgsS.reshape(-1, *imgsS.shape[2:])
+                imgsS = imgsS.repeat(2, 1, 1, 1)
 
-                imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
-                feature_1 = imgs[0]
-                feature_2 = imgs[1]
+                imgsS = RandomTransform(imgsS).apply_transformations(nb_class=2, value=[0, 0.1])
+                feature_S1 = imgsS[0][:25, :, :, :]
+                feature_S2 = imgsS[1][:25, :, :, :]
+
+                imgsC = imgs.to(device, non_blocking=True)
+                imgsC = imgsC.reshape(-1, *imgsC.shape[2:])
+                imgsC = imgsC.repeat(2, 1, 1, 1)
+
+                imgsC = RandomTransform(imgsC).apply_transformations(nb_class=2, value=[0, 0.1])
+                imgsC = imgsC.permute(1,0,2,3,4)
+                feature_C1 = imgsC[:25]
+                feature_C1 = feature_C1.reshape(-1, *imgsC.shape[2:])[25:, :, :, :]
+                feature_C2 = imgsC[25:]
+                feature_C2 = feature_C2.reshape(-1, *imgsC.shape[2:])[25:, :, :, :]
+                
+                feature_1 = torch.cat([feature_S1, feature_C1])
+                feature_2 = torch.cat([feature_S2, feature_C2])
                 """
-
-                imgs = imgs.to(device, non_blocking=True)
-                imgs = imgs.reshape(-1, *imgs.shape[2:])
-                imgs = imgs.repeat(2, 1, 1, 1)
-
-                imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
-                imgs = imgs.permute(1,0,2,3,4)
-                feature_1 = imgs[:25]
-                feature_1 = feature_1.reshape(-1, *imgs.shape[2:])
-                feature_2 = imgs[25:]
-                feature_2 = feature_2.reshape(-1, *imgs.shape[2:])
-
-                save_image(torch.cat([feature_1, feature_2], dim=0), os.path.join(log_dir,'features.png'), nrow=10)
+                save_image(torch.cat([feature_1, feature_2], dim=0), os.path.join(log_dir,'features_%s.png' % i_epoch), nrow=10)
 
                 optimizer.zero_grad()
                 

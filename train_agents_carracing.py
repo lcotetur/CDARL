@@ -22,10 +22,10 @@ from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventio
 from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder, Encoder3dshapes, Decoder3dshapes
 
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
-parser.add_argument('--repr', default='ppo', type=str)
+parser.add_argument('--repr', default='ilcm', type=str)
 parser.add_argument('--use_encoder', default=True, action='store_true')
-parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-02-26/model_reduce_dim_step_330000.pt', type=str)
-parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-02-27/model_step_150000.pt', type=str)
+parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-17/model_reduce_dim_step_400000.pt', type=str)
+parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-19_ilcm/model_step_320000_20.pt', type=str)
 parser.add_argument('--ilcm_encoder_type', default='conv', type=str)
 parser.add_argument('--save_dir', default='/home/mila/l/lea.cote-turcotte/CDARL/carracing_logs', type=str)
 parser.add_argument('--algo', default='clean_rl', type=str)
@@ -39,6 +39,7 @@ parser.add_argument('--num_envs', default=1, type=int)
 parser.add_argument('--action_repeat', default=8, type=int)
 parser.add_argument('--img_stack', default=4, type=int)
 parser.add_argument('--num_steps', default=2000, type=int)
+parser.add_argument('--num_episodes', default=10000, type=int)
 parser.add_argument('--gamma', default=0.999, type=float)
 parser.add_argument('--gae_lambda', default=0.95, type=float)
 parser.add_argument('--num_minibatches', default=8, type=int)
@@ -52,6 +53,7 @@ parser.add_argument('--norm_adv', default=True, type=bool)
 parser.add_argument('--clip_vloss', default=True, type=bool)
 parser.add_argument('--target_kl', default=None, type=float)
 parser.add_argument('--latent_size', default=6, type=int)
+parser.add_argument('--reduce_dim_latent_size', default=16, type=int)
 parser.add_argument('--log_interval', default=10, type=int)
 args = parser.parse_args()
 
@@ -167,7 +169,7 @@ def create_model_reduce_dim():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=32,
+            dim_z=args.reduce_dim_latent_size,
             )
     return model
 
@@ -178,7 +180,7 @@ def create_img_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=32,
+            dim_z=args.reduce_dim_latent_size,
             min_std=0.2,
         )
 
@@ -189,7 +191,7 @@ def create_img_encoder_decoder():
         encoder = ImageEncoder(
                 in_resolution=64,
                 in_features=3,
-                out_features=32,
+                out_features=args.reduce_dim_latent_size,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -201,7 +203,7 @@ def create_img_encoder_decoder():
                 permutation=0,
                 )
         decoder = ImageDecoder(
-                in_features=32,
+                in_features=args.reduce_dim_latent_size,
                 out_resolution=64,
                 out_features=3,
                 hidden_features=32,
@@ -219,7 +221,7 @@ def create_img_encoder_decoder():
         encoder = Encoder3dshapes(
                 in_resolution=64,
                 in_features=3,
-                out_features=32,
+                out_features=args.reduce_dim_latent_size,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -231,7 +233,7 @@ def create_img_encoder_decoder():
                 permutation=0,
                 )
         decoder = Decoder3dshapes(
-                in_features=32,
+                in_features=args.reduce_dim_latent_size,
                 out_resolution=64,
                 out_features=3,
                 hidden_features=32,
@@ -280,7 +282,7 @@ def create_mlp_encoder_decoder():
 
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
-                input_features=32,
+                input_features=args.reduce_dim_latent_size,
                 output_features=args.latent_size,
                 fix_std=False,
                 init_std=0.01,
@@ -289,7 +291,7 @@ def create_mlp_encoder_decoder():
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
                 input_features=args.latent_size,
-                output_features=32,
+                output_features=args.reduce_dim_latent_size,
                 fix_std=True,
                 init_std=1.0,
                 min_std=0.001,
@@ -503,6 +505,8 @@ if __name__ == "__main__":
                     torch.save(agent.state_dict(), os.path.join(log_dir, "policy.pt"))
                     results.save_logs(log_dir)
                     results.generate_plot(log_dir, log_dir)
+                if episode % 1000 == 0:
+                    torch.save(agent.state_dict(), os.path.join(log_dir, "policy_%s.pt" % episode))
 
                 episode += 1
                 total_reward = 0
@@ -595,7 +599,7 @@ if __name__ == "__main__":
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-        if episode > 5000:
+        if episode > args.num_episodes:
             print('Last Ep {}\tMoving average score: {:.2f}'.format(episode, running_score))
             torch.save(agent.state_dict(), os.path.join(log_dir, "policy.pt"))
             results.save_logs(log_dir)

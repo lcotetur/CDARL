@@ -4,7 +4,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical, Beta
 from torch.autograd import Function
-from utils import reparameterize
+from CDARL.utils import reparameterize
+
+
+class CarlaSimpleEncoder(nn.Module):
+    def __init__(self, latent_size = 32, input_channel = 3):
+        super(CarlaSimpleEncoder, self).__init__()
+        self.latent_size = latent_size
+
+        self.main = nn.Sequential(
+            nn.Conv2d(input_channel, 32, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
+        )
+
+        self.linear_mu = nn.Linear(9216, latent_size)
+
+    def forward(self, x):
+        x = self.main(x)
+        x = x.view(x.size(0), -1)
+        mu = self.linear_mu(x)
+        return mu
 
 class CarlaLatentPolicy(nn.Module):
     def __init__(self, input_dim, action_dim, hidden_layer=[64,64]):
@@ -60,7 +81,7 @@ class CarlaImgPolicy(nn.Module):
         for i in range(len(critic_layer_size)-1):
             critic_layers.append(nn.Linear(critic_layer_size[i], critic_layer_size[i+1]))
             critic_layers.append(nn.ReLU())
-        critic_layers.append(layer_init(nn.Linear(hidden_layer[-1], 1), gain=1))
+        critic_layers.append(nn.Linear(hidden_layer[-1], 1))
         self.critic = nn.Sequential(*critic_layers)
 
     def forward(self, x, action=None):

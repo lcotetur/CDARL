@@ -15,15 +15,15 @@ import warnings
 from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
 from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder
-from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, Encoder3dshapes, Decoder3dshapes
+from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, Encoder3dshapes, Decoder3dshapes, BasicEncoderCarla, BasicDecoderCarla
 import json
 import os
 import argparse
 import copy
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--algo', default='ilcm', type=str)
-parser.add_argument('--data', default='carracing', type=str)
+parser.add_argument('--algo', default='adagvae', type=str)
+parser.add_argument('--data', default='carla', type=str)
 parser.add_argument('--seed', default=2, type=int)
 parser.add_argument('--ilcm_encoder_type', default='conv', type=str)
 parser.add_argument('--data-dir-carracing', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
@@ -47,7 +47,7 @@ def create_model_reduce_dim():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=32,
+            dim_z=8,
             )
     return model
 
@@ -58,7 +58,7 @@ def create_img_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=32,
+            dim_z=8,
             min_std=0.2,
         )
 
@@ -128,35 +128,66 @@ def create_img_encoder_decoder():
                         )
     
     elif args.data == 'carla':
-        encoder = ImageEncoderCarla(
-            in_resolution=128,
-            in_features=3,
-            out_features=32,
-            hidden_features=32,
-            batchnorm=False,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            min_std=1.e-3,
-            permutation=0,
-            )
-        decoder = ImageDecoderCarla(
-            in_features=32,
-            out_resolution=128,
-            out_features=3,
-            hidden_features=32,
-            batchnorm=False,
-            min_std=1.0,
-            fix_std=True,
-            conv_class=CoordConv2d,
-            mlp_layers=2,
-            mlp_hidden=128,
-            elementwise_hidden=16,
-            elementwise_layers=0,
-            permutation=0,
-            )
+        if args.ilcm_encoder_type == 'resnet':
+            encoder = ImageEncoderCarla(
+                    in_resolution=128,
+                    in_features=3,
+                    out_features=8,
+                    hidden_features=32,
+                    batchnorm=False,
+                    conv_class=CoordConv2d,
+                    mlp_layers=2,
+                    mlp_hidden=128,
+                    elementwise_hidden=16,
+                    elementwise_layers=0,
+                    min_std=1.e-3,
+                    permutation=0,
+                    )
+            decoder = ImageDecoderCarla(
+                    in_features=8,
+                    out_resolution=128,
+                    out_features=3,
+                    hidden_features=32,
+                    batchnorm=False,
+                    min_std=1.0,
+                    fix_std=True,
+                    conv_class=CoordConv2d,
+                    mlp_layers=2,
+                    mlp_hidden=128,
+                    elementwise_hidden=16,
+                    elementwise_layers=0,
+                    permutation=0,
+                    )
+        elif args.ilcm_encoder_type == 'conv':
+            encoder = BasicEncoderCarla(
+                    in_resolution=128,
+                    in_features=3,
+                    out_features=8,
+                    hidden_features=32,
+                    batchnorm=False,
+                    conv_class=CoordConv2d,
+                    mlp_layers=2,
+                    mlp_hidden=128,
+                    elementwise_hidden=16,
+                    elementwise_layers=0,
+                    min_std=1.e-3,
+                    permutation=0,
+                    )
+            decoder = BasicDecoderCarla(
+                    in_features=8,
+                    out_resolution=128,
+                    out_features=3,
+                    hidden_features=32,
+                    batchnorm=False,
+                    min_std=1.0,
+                    fix_std=True,
+                    conv_class=CoordConv2d,
+                    mlp_layers=2,
+                    mlp_hidden=128,
+                    elementwise_hidden=16,
+                    elementwise_layers=0,
+                    permutation=0,
+                    )
     return encoder, decoder
 
 def create_ilcm():
@@ -191,7 +222,7 @@ def create_mlp_encoder_decoder():
 
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
-                input_features=32,
+                input_features=8,
                 output_features=6,
                 fix_std=False,
                 init_std=0.01,
@@ -200,7 +231,7 @@ def create_mlp_encoder_decoder():
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
                 input_features=6,
-                output_features=32,
+                output_features=8,
                 fix_std=True,
                 init_std=1.0,
                 min_std=0.001,
@@ -342,13 +373,13 @@ def computeTSNEProjectionOfLatentSpace(X, encoder_path, algo=args.algo, data=arg
                 del weights[k]
         causal_mlp.load_state_dict(weights)
         print("Loaded Weights")
-        out_dim = 16
+        out_dim = 6
 
     elif algo == 'vae' or algo == 'adagvae':
         if data == 'carracing' or data == '3dshapes':
             encoder = Encoder()
         elif data == 'carla':
-            encoder = CarlaEncoder(latent_size=16)
+            encoder = CarlaEncoder(latent_size=10)
         # saved checkpoints could contain extra weights such as linear_logsigma 
         weights = torch.load(encoder_path, map_location=torch.device('cpu'))
         for k in list(weights.keys()):
@@ -472,7 +503,7 @@ def copy_input(input, info):
     info.append(input)
     return input
 
-def saliency_map(X, encoders, algos=['vae', 'ilcm', 'cycle_vae style', 'cycle_vae content', 'adagvae'], data=args.data, ilcm_path='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-01-15/model_step_180000.pt'):
+def saliency_map(X, encoders, algos=['vae', 'cycle_vae', 'adagvae', 'ilcm'], data=args.data, ilcm_path='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-01-15/model_step_180000.pt'):
     ilcm = create_model_reduce_dim()
     ilcm = load_weights_saliency_map(ilcm, encoders['ilcm'])
 
@@ -484,7 +515,7 @@ def saliency_map(X, encoders, algos=['vae', 'ilcm', 'cycle_vae style', 'cycle_va
         adagvae = Encoder(latent_size=32)
     elif data == 'carla':
         vae = CarlaEncoder()
-        adagvae = CarlaEncoder()
+        adagvae = CarlaEncoder(latent_size=10)
     # saved checkpoints could contain extra weights such as linear_logsigma 
     vae = load_weights_saliency_map(vae, encoders['vae'])
     adagvae = load_weights_saliency_map(adagvae, encoders['adagvae'])
@@ -498,7 +529,7 @@ def saliency_map(X, encoders, algos=['vae', 'ilcm', 'cycle_vae style', 'cycle_va
     input = normalize(X)
     input.unsqueeze(0)
 
-    infos = {'vae':[], 'cycle-vae style':[], 'cycle-vae content':[], 'adagvae':[], 'ilcm':[]}
+    infos = {'vae':[], 'cycle-vae':[], 'adagvae':[], 'ilcm':[]}
     for algo in algos:
         if algo == 'vae':
             input = copy_input(input, infos['vae'])
@@ -514,10 +545,11 @@ def saliency_map(X, encoders, algos=['vae', 'ilcm', 'cycle_vae style', 'cycle_va
             z, _ = ilcm.encoder.mean_std(input)
             pred = causal_mlp.encode_to_causal(z)
             infos['ilcm'].append(pred)
-        elif algo == 'cycle_vae style':
-            input = copy_input(input, infos['cycle-vae style'])
-            _, _, pred = cycle_vae(input)
-            infos['cycle-vae style'].append(pred)
+        elif algo == 'cycle_vae':
+            input = copy_input(input, infos['cycle-vae'])
+            content, _, style = cycle_vae(input)
+            pred = torch.cat([content, style], dim=1)
+            infos['cycle-vae'].append(pred)
         elif algo == 'cycle_vae content':
             input = copy_input(input, infos['cycle-vae content'])
             pred, _, _ = cycle_vae(input)
@@ -538,13 +570,13 @@ def saliency_map(X, encoders, algos=['vae', 'ilcm', 'cycle_vae style', 'cycle_va
     img1 = np.transpose(input_img.detach().numpy(), (1, 2, 0))
 
     fig = plt.figure(figsize=(30, 10))
-    plt.subplot(1, 6, 1)
+    plt.subplot(1, 5, 1)
     plt.imshow(img1)
     plt.xticks([])
     plt.yticks([])
     i=2
     for key, info in infos.items():
-        plt.subplot(1, 6, i)
+        plt.subplot(1, 5, i)
         img2 = info[2].numpy()
         plt.imshow(img2, cmap=plt.cm.hot, interpolation='quadric')
         plt.xticks([])
@@ -569,9 +601,9 @@ if __name__ == "__main__":
     carla_encoders = {
                 'cycle_vae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carla/2024-01-24/encoder_cycle_vae.pt',
                 'vae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carla/2024-01-24/encoder_vae.pt',
-                'adagvae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carla/2024-02-15/encoder_adagvae.pt',
-                'ilcm_causal': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-07/model_step_120000.pt',
-                'ilcm': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-14_1_reduce_dim/model_step_50000.pt'}
+                'adagvae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carla/2024-03-12/encoder_adagvae.pt',
+                'ilcm_causal': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-13_ilcm/model_step_120000.pt',
+                'ilcm': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-12_1/model_step_50000.pt'}
     shapes3d_encoders = {
                 'cycle_vae style': '/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/3dshapes/2024-02-26/encoder.pt',
                 'cycle_vae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/3dshapes/2024-02-26/encoder.pt',
@@ -872,7 +904,7 @@ if __name__ == "__main__":
     elif args.data == 'carla':
         t_sne = computeTSNEProjectionOfLatentSpace(imgs_carla, carla_encoders[args.algo], algo=args.algo, data='carla', ilcm_path=carla_encoders['ilcm_causal'])
         tsne(t_sne, carla_labels, save_path, 't-SNE %s latents carla' % args.algo, data='carla')
-        #saliency_map(imgs_carla[0].unsqueeze(0), carla_encoders, ilcm_path=carla_encoders['ilcm_causal'])
+        saliency_map(imgs_carla[0].unsqueeze(0), carla_encoders, ilcm_path=carla_encoders['ilcm_causal'])
     elif args.data == '3dshapes':
         #shapes3d data
         dataset3dshapes = Shape3dDataset()

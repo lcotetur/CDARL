@@ -4,7 +4,7 @@
 
 import hydra
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import TensorDataset, Dataset, DataLoader
 from torchvision import transforms
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,12 +20,10 @@ import os
 import yaml
 from functools import lru_cache
 
-from CDARL.data.shapes3d_data import Shape3dDataset
 from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
 from torchvision.utils import save_image
 
 from experiment_utils import (
-    initialize_experiment,
     save_model,
     logger,
     create_optimizer_and_scheduler,
@@ -54,7 +52,7 @@ def create_model_reduce_dim(cfg):
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=32,
+            dim_z=16,
             )
     return model
 
@@ -65,7 +63,7 @@ def create_img_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=32,
+            dim_z=16,
             min_std=0.2,
         )
 
@@ -106,7 +104,7 @@ def create_img_encoder_decoder(cfg):
         encoder = Encoder3dshapes(
                 in_resolution=64,
                 in_features=3,
-                out_features=32,
+                out_features=16,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -118,7 +116,7 @@ def create_img_encoder_decoder(cfg):
                 permutation=0,
                 )
         decoder = Decoder3dshapes(
-                in_features=32,
+                in_features=16,
                 out_resolution=64,
                 out_features=3,
                 hidden_features=32,
@@ -184,7 +182,7 @@ def create_model(cfg):
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy=cfg.model.averaging_strategy,
-            dim_z=6,
+            dim_z=10,
             )
 
     return model
@@ -200,7 +198,7 @@ def create_scm(cfg):
             hidden_units=cfg.model.scm.hidden_units,
             hidden_layers=cfg.model.scm.hidden_layers,
             homoskedastic=cfg.model.scm.homoskedastic,
-            dim_z=6,
+            dim_z=10,
             min_std=cfg.model.scm.min_std,
         )
 
@@ -217,16 +215,16 @@ def create_encoder_decoder(cfg):
 
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
-                input_features=32,
-                output_features=6,
+                input_features=16,
+                output_features=10,
                 fix_std=cfg.model.encoder.fix_std,
                 init_std=cfg.model.encoder.std,
                 min_std=cfg.model.encoder.min_std,
             )
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
-                input_features=6,
-                output_features=32,
+                input_features=10,
+                output_features=16,
                 fix_std=cfg.model.decoder.fix_std,
                 init_std=cfg.model.decoder.std,
                 min_std=cfg.model.decoder.min_std,
@@ -261,7 +259,7 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
     transform = transforms.Compose([transforms.ToTensor()])
     dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
     loader = get_dataloader(cfg, dataset)
-    steps_per_epoch = 1
+    steps_per_epoch = len(loader)
 
     # GPU
     model = model.to(device)
@@ -283,13 +281,11 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
         for i_split in range(cfg.data.num_splitted):
             for i_batch, imgs in enumerate(loader):
 
-                m_epoch = step/1000
-                # Epoch-based schedules
-                if m_epoch % 10 == 0 and m_epoch != 0:
-                    print('epoch_schedule', m_epoch)
+                if step/1000 % 10 == 0:
                     model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
-                        cfg, model, model_reduce_dim, m_epoch, optim
-                        )
+                    cfg, model, model_reduce_dim, step/1000, optim
+                    )
+
 
                 fractional_epoch = step / steps_per_epoch
 
@@ -311,33 +307,33 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
 
                 z1, z2 = (z1.to(device), z2.to(device))
 
-                    # Model forward pass
+                # Model forward pass
                 log_prob, model_outputs = model(
-                        z1,
-                        z2,
-                        beta=beta,
-                        beta_intervention_target=beta_intervention,
-                        pretrain_beta=cfg.training.pretrain_beta,
-                        full_likelihood=cfg.training.full_likelihood,
-                        likelihood_reduction=cfg.training.likelihood_reduction,
-                        pretrain=pretrain,
-                        model_interventions=model_interventions,
-                        deterministic_intervention_encoder=deterministic_intervention_encoder,
-                        intervention_encoder_offset=intervention_encoder_offset,
-                        **graph_kwargs,
-                    )
+                            z1,
+                            z2,
+                            beta=beta,
+                            beta_intervention_target=beta_intervention,
+                            pretrain_beta=cfg.training.pretrain_beta,
+                            full_likelihood=cfg.training.full_likelihood,
+                            likelihood_reduction=cfg.training.likelihood_reduction,
+                            pretrain=pretrain,
+                            model_interventions=model_interventions,
+                            deterministic_intervention_encoder=deterministic_intervention_encoder,
+                            intervention_encoder_offset=intervention_encoder_offset,
+                            **graph_kwargs,
+                        )
 
                 # Loss and metrics
                 loss, metrics = criteria(
-                        log_prob,
-                        z_regularization_amount=z_regularization_amount,
-                        edge_regularization_amount=edge_regularization_amount,
-                        cyclicity_regularization_amount=cyclicity_regularization_amount,
-                        consistency_regularization_amount=consistency_regularization_amount,
-                        inverse_consistency_regularization_amount=inverse_consistency_regularization_amount,
-                        intervention_entropy_regularization_amount=intervention_entropy_regularization_amount,
-                        **model_outputs,
-                    )
+                            log_prob,
+                            z_regularization_amount=z_regularization_amount,
+                            edge_regularization_amount=edge_regularization_amount,
+                            cyclicity_regularization_amount=cyclicity_regularization_amount,
+                            consistency_regularization_amount=consistency_regularization_amount,
+                            inverse_consistency_regularization_amount=inverse_consistency_regularization_amount,
+                            intervention_entropy_regularization_amount=intervention_entropy_regularization_amount,
+                            **model_outputs,
+                        )
 
                 # Optimizer step
                 finite, grad_norm = optimizer_step(cfg, loss, model, model_outputs, optim, z1, z2)
@@ -346,31 +342,31 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
 
                 # Validation loop
                 #if frequency_check(step, cfg.training.validate_every_n_steps):
-                    #validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device)
+                        #validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device)
 
                 # Log loss and metrics
                 step += 1
                 #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
 
-                # Save model checkpoint
-                if frequency_check(step, cfg.data.training.save_model_every_n_steps):
-                    save_model(log_dir, model, f"model_step_{step}.pt")
-                    #imgs1 = x1
-                    #with torch.no_grad():
-                        #recon1 = model_reduce_dim.encode_decode(imgs1)
-                    #saved_imgs = torch.cat([imgs1, recon1], dim=0)
-                    # save images
-                    #path_image = os.path.join(log_dir, f'recon_{step}.png')
-                    #save_image(saved_imgs, path_image, nrow=10)
-                    results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
-                    results.save_logs(log_dir)
-                    results.generate_plot(log_dir,log_dir)
+            # Save model checkpoint
+            if frequency_check(step, cfg.data.training.save_model_every_n_steps):
+                save_model(log_dir, model, f"model_step_{step}_{epoch}.pt")
+                imgs1 = x1
+                with torch.no_grad():
+                    recon1 = model_reduce_dim.encode_decode(imgs1)
+                saved_imgs = torch.cat([imgs1, recon1], dim=0)
+                # save images
+                path_image = os.path.join(log_dir, f'recon_{step}.png')
+                save_image(saved_imgs, path_image, nrow=10)
+                results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
+                results.save_logs(log_dir)
+                #results.generate_plot(log_dir,log_dir)
                     # save metrics
-                    update_dict(train_metrics, metrics)
-                    with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
-                        json.dump(train_metrics, f)
+                update_dict(train_metrics, metrics)
+                with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
+                    json.dump(train_metrics, f)
 
-            updateloader(cfg, loader, dataset)
+                updateloader(cfg, loader, dataset)
 
         if scheduler is not None and epoch < cfg.data.training.epochs - 1:
             scheduler.step()
@@ -412,15 +408,62 @@ def updateloader(cfg, loader, dataset):
 
 def encode_data(cfg, imgs, model_reduce_dim, device):
     #style
-    """
-    imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)              
-    imgs = imgs.reshape(-1, *imgs.shape[2:])
-    imgs = imgs.repeat(2, 1, 1, 1)
+    if cfg.data.training.intervention == 'style':
+        if cfg.data.training.number_domains == 10:
+            imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)               
+            imgs = imgs.reshape(-1, *imgs.shape[2:])
+            imgs = imgs.repeat(2, 1, 1, 1)
+            imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+            x1 = imgs[0]
+            x2 = imgs[1]
+        elif cfg.data.training.number_domains == 2: 
+            imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)  
+            imgs = imgs[2:3, :, :, :, :]
+            imgs = imgs.reshape(-1, *imgs.shape[2:])
+            imgs = imgs.repeat(2, 1, 1, 1)
+            imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+            x1 = imgs[0]
+            x2 = imgs[1]
+        elif cfg.data.training.number_domains == 5:
+            imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)  
+            imgs = imgs[0:3, :, :, :, :]
+            imgs = imgs.reshape(-1, *imgs.shape[2:])
+            imgs = imgs.repeat(2, 1, 1, 1)
+            imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.1])
+            x1 = imgs[0]
+            x2 = imgs[1]
 
-    if cfg.data.training.random_augmentations == True:
-        imgs = RandomTransform(imgs).apply_random_transformations(nb_class=2)
-    else:
-        imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+    if cfg.data.training.intervention == 'content':
+        if cfg.data.training.number_domains == 10:
+            imgs = imgs.to(device, non_blocking=True)
+            imgs = imgs.reshape(-1, *imgs.shape[2:])
+            imgs = imgs.repeat(2, 1, 1, 1)
+            imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
+            imgs = imgs.permute(1,0,2,3,4)
+            m = int(imgs.shape[0]/2)
+            feature_1 = imgs[:m]
+            x1 = feature_1.reshape(-1, *imgs.shape[2:])
+            feature_2 = imgs[m:]
+            x2 = feature_2.reshape(-1, *imgs.shape[2:])
+        elif cfg.data.training.number_domains == 2: 
+            imgs = imgs.to(device, non_blocking=True)
+            imgs = imgs[2:3, :, :, :, :]
+            imgs = imgs.reshape(-1, *imgs.shape[2:])
+            imgs = imgs.repeat(2, 1, 1, 1)
+            imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+            imgs = imgs.permute(1,0,2,3,4)
+            m = int(imgs.shape[0]/2)
+            feature_1 = imgs[:m]
+            x1 = feature_1.reshape(-1, *imgs.shape[2:])
+            feature_2 = imgs[m:]
+            x2 = feature_2.reshape(-1, *imgs.shape[2:])
+        elif cfg.data.training.number_domains == 5:
+            imgs = imgs.to(device, non_blocking=True)
+            m = int(imgs.shape[0]/2)
+            feature_1 = imgs[:m]
+            x1 = feature_C1.reshape(-1, *imgs.shape[2:])
+            feature_2 = imgs[m:]
+            x2 = feature_2.reshape(-1, *imgs.shape[2:])
 
     x1 = imgs[0]
     x2 = imgs[1]
@@ -438,6 +481,7 @@ def encode_data(cfg, imgs, model_reduce_dim, device):
     x1 = feature_1.reshape(-1, *imgs.shape[2:])
     feature_2 = imgs[m:]
     x2 = feature_2.reshape(-1, *imgs.shape[2:])
+    """
     
     x1, x2 = (x1.to(device), x2.to(device))
     with torch.no_grad():
@@ -450,7 +494,7 @@ def epoch_schedules(cfg, model, model_reduce_dim, epoch, optim):
     # Pretraining?
     pretrain = cfg.training.pretrain_epochs is not None and epoch < cfg.training.pretrain_epochs
     if epoch == cfg.training.pretrain_epochs:
-        logger.info(f"Stopping pretraining at epoch {epoch}")
+        print(f"Stopping pretraining at epoch {epoch}")
 
     # Model interventions in SCM / noise model?
     model_interventions = (
@@ -458,7 +502,7 @@ def epoch_schedules(cfg, model, model_reduce_dim, epoch, optim):
         or epoch >= cfg.training.model_interventions_after_epoch
     )
     if epoch == cfg.training.model_interventions_after_epoch:
-        logger.info(f"Beginning to model intervention distributions at epoch {epoch}")
+        print(f"Beginning to model intervention distributions at epoch {epoch}")
 
     # Freeze encoder?
     if cfg.training.freeze_encoder_epoch is not None and epoch == cfg.training.freeze_encoder_epoch:
@@ -484,7 +528,7 @@ def epoch_schedules(cfg, model, model_reduce_dim, epoch, optim):
             epoch >= cfg.training.deterministic_intervention_encoder_after_epoch
         )
     if epoch == cfg.training.deterministic_intervention_encoder_after_epoch:
-        logger.info(f"Switching to deterministic intervention encoder at epoch {epoch}")
+        print(f"Switching to deterministic intervention encoder at epoch {epoch}")
 
     return model_interventions, pretrain, deterministic_intervention_encoder
 
@@ -501,19 +545,22 @@ def fix_topological_order(cfg, model, model_reduce_dim, partition="val", dataloa
     cpu = torch.device("cpu")
     model.to(device)
 
+    # Dataloader
     if dataloader is None:
         transform = transforms.Compose([transforms.ToTensor()])
         dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
         loader = get_dataloader(cfg, dataset)
+        #dataloader = get_dataloader_test(cfg, partition, cfg.eval.batchsize)
 
     # Load data and compute noise encodings
     noise = []
-    for i_split in range(cfg.data.num_splitted):
-        for i_batch, imgs in enumerate(loader):
-            _, _, z, _ = encode_data(cfg, imgs, model_reduce_dim, device)
-            batch = z.to(device)
-            noise.append(model.encode_to_noise(batch, deterministic=True).to(cpu))
-        loader = updateloader(cfg, loader, dataset)
+    #for x_batch, *_ in dataloader:
+    for i_batch, imgs in enumerate(loader):
+        _, _, z, _ = encode_data(cfg, imgs, model_reduce_dim, device)
+        batch = z.to(z)
+        noise.append(model.encode_to_noise(batch, deterministic=True).to(cpu))
+        #x_batch = x_batch.to(device)
+        #noise.append(model.encode_to_noise(x_batch, deterministic=True).to(cpu))
 
     noise = torch.cat(noise, dim=0).detach()
 
@@ -641,14 +688,35 @@ def solution_dependance_on_noise(model, i, j, noise):
     return dependance(transform, inputs, context, j, invert=True)
 
 @torch.no_grad()
-def validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device):
+def validation_loop_imgs(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device):
     """Validation loop, computing a number of metrics and checkpointing the best model"""
 
     x1, x2, z1, z2 = encode_data(cfg, imgs, model_reduce_dim, device)
 
     return eval_implicit_graph(cfg, model, model_reduce_dim, dataloader=imgs)
 
+@torch.no_grad()
+def validation_loop(cfg, model, criteria, val_loader, best_state, val_metrics, step, device):
+    """Validation loop, computing a number of metrics and checkpointing the best model"""
 
+    loss, nll, metrics = compute_metrics_on_dataset(cfg, model, criteria, val_loader, device)
+    metrics.update(eval_implicit_graph(cfg, model, dataloader=val_loader))
+
+    # Store validation metrics
+    update_dict(val_metrics, metrics)
+
+    # Print DCI disentanglement score
+    print(
+        f"Step {step}: causal disentanglement = {metrics['causal_disentanglement']:.2f}, "
+        f"noise disentanglement = {metrics['noise_disentanglement']:.2f}"
+    )
+
+    # Early stopping: compare val loss to last val loss
+    new_val_loss = metrics["nll"] if cfg.training.early_stopping_var == "nll" else loss.item()
+    if best_state["loss"] is None or new_val_loss < best_state["loss"]:
+        best_state["loss"] = new_val_loss
+        best_state["state_dict"] = model.state_dict().copy()
+        best_state["step"] = step
 
 @torch.no_grad()
 def eval_implicit_graph(cfg, model, model_reduce_dim, partition="val", dataloader=None):

@@ -28,8 +28,9 @@ parser.add_argument('--learning-rate', default=0.0001, type=float)
 parser.add_argument('--beta', default=1, type=int)
 parser.add_argument('--save-freq', default=19000, type=int)
 parser.add_argument('--seed', default=1, type=int)
+parser.add_argument('--loss', default='mse', type=str)
 parser.add_argument('--bloss-coef', default=1, type=int)
-parser.add_argument('--latent-size', default=10, type=int)
+parser.add_argument('--latent-size', default=16, type=int)
 parser.add_argument('--flatten-size', default=9216, type=int)
 parser.add_argument('--random-augmentations', default=False, type=bool)
 parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
@@ -52,7 +53,7 @@ def main():
     # create dataset and loader
     transform = transforms.Compose([transforms.ToTensor()])
     dataset = ExpDataset(args.data_dir, args.data_tag, args.num_splitted, transform)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # create model
     model = Model(latent_size = args.latent_size)

@@ -21,7 +21,7 @@ Xvfb :1 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &> xvfb.log & 
 
 # connect to new terminal to start carla server 
 ssh <node>
-export CARLA_ROOT=//home/mila/l/lea.cote-turcotte/carla
+export CARLA_ROOT=/home/mila/l/lea.cote-turcotte/carla
 export PYTHONPATH=$PYTHONPATH:${CARLA_ROOT}/PythonAPI/carla/dist/carla-0.9.8-py3.5-linux-x86_64.egg:${CARLA_ROOT}/PythonAPI/carla/agents:${CARLA_ROOT}/PythonAPI/carla
 
 cd carla

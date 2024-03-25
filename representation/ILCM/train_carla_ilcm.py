@@ -4,7 +4,7 @@
 
 import hydra
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import TensorDataset, Dataset, DataLoader
 from torchvision import transforms
 import numpy as np
 import matplotlib.pyplot as plt
@@ -45,7 +45,7 @@ from training import VAEMetrics
 def create_model_reduce_dim(cfg):
     # Create model
     scm = create_img_scm()
-    encoder, decoder = create_img_encoder_decoder()
+    encoder, decoder = create_img_encoder_decoder(cfg)
     intervention_encoder = create_intervention_encoder(cfg)
     model = ILCM(
             scm,
@@ -54,7 +54,7 @@ def create_model_reduce_dim(cfg):
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=32,
+            dim_z=16,
             )
     return model
 
@@ -65,18 +65,18 @@ def create_img_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=32,
+            dim_z=16,
             min_std=0.2,
         )
 
     return scm
 
-def create_img_encoder_decoder():
+def create_img_encoder_decoder(cfg):
     if cfg.data.training.encoder == 'resnet':
         encoder = ImageEncoderCarla(
                 in_resolution=128,
                 in_features=3,
-                out_features=32,
+                out_features=8,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -88,7 +88,7 @@ def create_img_encoder_decoder():
                 permutation=0,
                 )
         decoder = ImageDecoderCarla(
-                in_features=32,
+                in_features=8,
                 out_resolution=128,
                 out_features=3,
                 hidden_features=32,
@@ -106,7 +106,7 @@ def create_img_encoder_decoder():
         encoder = BasicEncoderCarla(
                 in_resolution=128,
                 in_features=3,
-                out_features=32,
+                out_features=16,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -118,7 +118,7 @@ def create_img_encoder_decoder():
                 permutation=0,
                 )
         decoder = BasicDecoderCarla(
-                in_features=32,
+                in_features=16,
                 out_resolution=128,
                 out_features=3,
                 hidden_features=32,
@@ -134,10 +134,10 @@ def create_img_encoder_decoder():
                 )
     return encoder, decoder
 
-@hydra.main(version_base=None, config_path="config", config_name="ilcm")
+@hydra.main(version_base=None, config_path="config", config_name="ilcm_carla")
 def main(cfg):
     """High-level experiment function"""
-    log_dir = os.path.join(cfg.data.save_path, str(date.today()) + 'ilcm')
+    log_dir = os.path.join(cfg.data.save_path, str(date.today()) + '_ilcm')
     os.makedirs(log_dir, exist_ok=True)
     print(log_dir)
 
@@ -164,7 +164,7 @@ def main(cfg):
     save_model(log_dir, model)
 
     # Save results
-    results.save_logs(cfg.data.save_path, str(date.today()))
+    results.save_logs(log_dir)
     results.generate_plot(log_dir, log_dir)
 
     logger.info("Anders nog iets?")
@@ -184,7 +184,7 @@ def create_model(cfg):
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy=cfg.model.averaging_strategy,
-            dim_z=16,
+            dim_z=10,
             )
 
     return model
@@ -200,7 +200,7 @@ def create_scm(cfg):
             hidden_units=cfg.model.scm.hidden_units,
             hidden_layers=cfg.model.scm.hidden_layers,
             homoskedastic=cfg.model.scm.homoskedastic,
-            dim_z=16,
+            dim_z=10,
             min_std=cfg.model.scm.min_std,
         )
 
@@ -217,16 +217,16 @@ def create_encoder_decoder(cfg):
 
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
-                input_features=32,
-                output_features=16,
+                input_features=16,
+                output_features=10,
                 fix_std=cfg.model.encoder.fix_std,
                 init_std=cfg.model.encoder.std,
                 min_std=cfg.model.encoder.min_std,
             )
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
-                input_features=16,
-                output_features=32,
+                input_features=10,
+                output_features=16,
                 fix_std=cfg.model.decoder.fix_std,
                 init_std=cfg.model.decoder.std,
                 min_std=cfg.model.decoder.min_std,
@@ -257,11 +257,13 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
     train_metrics = defaultdict(list)
     best_state = {"state_dict": None, "loss": None, "step": None}
 
-    transform = transforms.Compose([transforms.ToTensor()])
-    dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
-    loader = get_dataloader(cfg, dataset)
-    steps_per_epoch = 1
-
+    #transform = transforms.Compose([transforms.ToTensor()])
+    #dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+    #loader = get_dataloader(cfg, dataset)
+    #steps_per_epoch = len(loader)
+    train_loader = get_dataloader_test(cfg, "train", batchsize=cfg.training.batchsize, shuffle=True)
+    val_loader = get_dataloader_test(cfg, "val", batchsize=cfg.eval.batchsize, shuffle=False, include_noise_encodings=False)
+    steps_per_epoch = len(train_loader)
     # GPU
     model = model.to(device)
     model_reduce_dim = model_reduce_dim.to(device)
@@ -280,39 +282,32 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
             cfg, model, model_reduce_dim, epoch, optim
         
         )
-        for i_split in range(cfg.data.num_splitted):
-            for i_batch, imgs in enumerate(loader):
+        #for i_split in range(cfg.data.num_splitted):
+            #for i_batch, imgs in enumerate(loader):
+        for z1, z2 in train_loader:
 
-                m_epoch = step/1000
-                # Epoch-based schedules
-                if m_epoch % 10 == 0 and m_epoch != 0:
-                    print('epoch_schedule', m_epoch)
-                    model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
-                        cfg, model, model_reduce_dim, m_epoch, optim
-                        )
+            fractional_epoch = step / steps_per_epoch
 
-                fractional_epoch = step / steps_per_epoch
+            #x1, x2, z1, z2 = encode_data(cfg, imgs, model_reduce_dim, device)
 
-                x1, x2, z1, z2 = encode_data(cfg, imgs, model_reduce_dim, device)
+            model.train()
 
-                model.train()
+            (
+                beta,
+                beta_intervention,
+                consistency_regularization_amount,
+                cyclicity_regularization_amount,
+                edge_regularization_amount,
+                inverse_consistency_regularization_amount,
+                z_regularization_amount,
+                intervention_entropy_regularization_amount,
+                intervention_encoder_offset,
+            ) = step_schedules(cfg, model, fractional_epoch)
 
-                (
-                    beta,
-                    beta_intervention,
-                    consistency_regularization_amount,
-                    cyclicity_regularization_amount,
-                    edge_regularization_amount,
-                    inverse_consistency_regularization_amount,
-                    z_regularization_amount,
-                    intervention_entropy_regularization_amount,
-                    intervention_encoder_offset,
-                ) = step_schedules(cfg, model, fractional_epoch)
-
-                z1, z2 = (z1.to(device), z2.to(device))
+            z1, z2 = (z1.to(device), z2.to(device))
 
                     # Model forward pass
-                log_prob, model_outputs = model(
+            log_prob, model_outputs = model(
                         z1,
                         z2,
                         beta=beta,
@@ -328,7 +323,7 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                     )
 
                 # Loss and metrics
-                loss, metrics = criteria(
+            loss, metrics = criteria(
                         log_prob,
                         z_regularization_amount=z_regularization_amount,
                         edge_regularization_amount=edge_regularization_amount,
@@ -340,19 +335,19 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                     )
 
                 # Optimizer step
-                finite, grad_norm = optimizer_step(cfg, loss, model, model_outputs, optim, z1, z2)
-                if not finite:
-                    nan_counter += 1
+            finite, grad_norm = optimizer_step(cfg, loss, model, model_outputs, optim, z1, z2)
+            if not finite:
+                nan_counter += 1
 
                 # Log loss and metrics
-                step += 1
+            step += 1
                 #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
 
                 # Save model checkpoint
-                if frequency_check(step, cfg.training.save_model_every_n_steps):
-                    save_model(log_dir, model, f"model_step_{step}.pt")
-                    results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
-                    results.save_logs(cfg.data.save_path, str(date.today()))
+            if frequency_check(step, cfg.training.save_model_every_n_steps):
+                save_model(log_dir, model, f"model_step_{step}.pt")
+                results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
+                results.save_logs(cfg.data.save_path, str(date.today()))
                     #imgs1 = x1
                     #with torch.no_grad():
                         #recon1 = model_reduce_dim.encode_decode(imgs1)
@@ -361,11 +356,11 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                     #path_image = os.path.join(log_dir, f'recon_{step}.png')
                     #save_image(saved_imgs, path_image, nrow=10)
                     # save metrics
-                    update_dict(train_metrics, metrics)
-                    with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
-                        json.dump(train_metrics, f)
+                update_dict(train_metrics, metrics)
+                with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
+                    json.dump(train_metrics, f)
 
-            updateloader(cfg, loader, dataset)
+            #updateloader(cfg, loader, dataset)
 
             # LR scheduler
         if scheduler is not None and epoch < cfg.data.training.epochs - 1:
@@ -401,6 +396,15 @@ def get_dataloader(cfg, dataset):
     logger.debug(f"Finished loading data {cfg.data.name}")
     return loader
 
+def get_dataloader_test(cfg, tag, batchsize=None, shuffle=False, include_noise_encodings=False):
+    """Load data from disk and return DataLoader instance"""
+    filename = Path(cfg.data.data_dir_ilcm) / f"{tag}_carla_encoded.pt"
+    data = torch.load(filename)
+    dataset = TensorDataset(*data)
+    dataloader = DataLoader(dataset, batch_size=batchsize, shuffle=shuffle)
+
+    return dataloader
+
 def updateloader(cfg, loader, dataset):
     dataset.loadnext()
     loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=cfg.data.training.shuffle, num_workers=cfg.training.num_workers)
@@ -426,6 +430,7 @@ def encode_data(cfg, imgs, model_reduce_dim, device):
 
     x1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
     x2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
+    
     '''
     # Style
     imgs_style = imgs.repeat(2, 1, 1, 1, 1)
@@ -504,16 +509,20 @@ def fix_topological_order(cfg, model, model_reduce_dim, partition="val", dataloa
 
     # Dataloader
     if dataloader is None:
-        transform = transforms.Compose([transforms.ToTensor()])
-        dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
-        loader = get_dataloader(cfg, dataset)
+        #transform = transforms.Compose([transforms.ToTensor()])
+        #dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
+        loader = get_dataloader_test(cfg, partition, cfg.eval.batchsize)
 
     # Load data and compute noise encodings
     noise = []
-    for i_batch, imgs in enumerate(loader):
-        _, _, z, _ = encode_data(cfg, imgs, model_reduce_dim, device)
-        batch = z.to(z)
-        noise.append(model.encode_to_noise(batch, deterministic=True).to(cpu))
+    #for i_batch, imgs in enumerate(loader):
+    for x_batch, *_ in loader:
+        x_batch = x_batch.to(device)
+        noise.append(model.encode_to_noise(x_batch, deterministic=True).to(cpu))
+
+        #_, _, z, _ = encode_data(cfg, imgs, model_reduce_dim, device)
+        #batch = z.to(z)
+        #noise.append(model.encode_to_noise(batch, deterministic=True).to(cpu))
 
     noise = torch.cat(noise, dim=0).detach()
 
@@ -641,12 +650,36 @@ def solution_dependance_on_noise(model, i, j, noise):
     return dependance(transform, inputs, context, j, invert=True)
 
 @torch.no_grad()
-def validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device):
+def validation_loop_imgs(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device):
     """Validation loop, computing a number of metrics and checkpointing the best model"""
 
     x1, x2, z1, z2 = encode_data(cfg, imgs, model_reduce_dim, device)
 
     return eval_implicit_graph(cfg, model, model_reduce_dim, dataloader=imgs)
+
+@torch.no_grad()
+def validation_loop(cfg, model, criteria, val_loader, best_state, val_metrics, step, device):
+    """Validation loop, computing a number of metrics and checkpointing the best model"""
+
+    loss, nll, metrics = compute_metrics_on_dataset_causalcircuit(cfg, model, criteria, val_loader, device)
+    metrics.update(eval_dci_scores(cfg, model, test_loader=val_loader))
+    metrics.update(eval_implicit_graph(cfg, model, dataloader=val_loader))
+
+    # Store validation metrics
+    update_dict(val_metrics, metrics)
+
+    # Print DCI disentanglement score
+    print(
+        f"Step {step}: causal disentanglement = {metrics['causal_disentanglement']:.2f}, "
+        f"noise disentanglement = {metrics['noise_disentanglement']:.2f}"
+    )
+
+    # Early stopping: compare val loss to last val loss
+    new_val_loss = metrics["nll"] if cfg.training.early_stopping_var == "nll" else loss.item()
+    if best_state["loss"] is None or new_val_loss < best_state["loss"]:
+        best_state["loss"] = new_val_loss
+        best_state["state_dict"] = model.state_dict().copy()
+        best_state["step"] = step
 
 
 

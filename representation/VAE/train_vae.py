@@ -17,30 +17,30 @@ from CDARL.utils import ExpDataset, reparameterize, RandomTransform, seed_everyt
 from vae import VAE, compute_loss, vae_loss
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
-parser.add_argument('--data-tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
-parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
-parser.add_argument('--save-dir', default="/home/mila/l/lea.cote-turcotte/CDARL/VAE/runs/carracing", type=str)
-parser.add_argument('--batch-size', default=10, type=int)
-parser.add_argument('--num-epochs', default=2, type=int)
-parser.add_argument('--num-workers', default=4, type=int)
-parser.add_argument('--learning-rate', default=0.0001, type=float)
+parser.add_argument('--data_dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
+parser.add_argument('--data_tag', default='car', type=str, help='files with data_tag in name under data directory will be considered as collected states')
+parser.add_argument('--num_splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
+parser.add_argument('--save_dir', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carracing", type=str)
+parser.add_argument('--batch_size', default=10, type=int)
+parser.add_argument('--number-domains', default=2, type=int)
+parser.add_argument('--num_epochs', default=2, type=int)
+parser.add_argument('--num_workers', default=4, type=int)
+parser.add_argument('--learning_rate', default=0.0001, type=float)
 parser.add_argument('--beta', default=10, type=int)
-parser.add_argument('--save-freq', default=19000, type=int)
-parser.add_argument('--bloss-coef', default=1, type=int)
+parser.add_argument('--save_freq', default=19000, type=int)
+parser.add_argument('--bloss_coef', default=1, type=int)
 parser.add_argument('--seed', default=1, type=int)
-parser.add_argument('--latent-size', default=32, type=int)
-parser.add_argument('--flatten-size', default=1024, type=int)
-parser.add_argument('--stack_frames', default=True, type=bool)
+parser.add_argument('--latent_size', default=32, type=int)
+parser.add_argument('--flatten_size', default=1024, type=int)
+parser.add_argument('--stack_frames', default=False, type=bool)
 parser.add_argument('--img_stack', default=4, type=int)
-parser.add_argument('--random-augmentations', default=True, type=bool)
+parser.add_argument('--random_augmentations', default=False, type=bool)
 parser.add_argument('--verbose', default=True, type=bool)
-parser.add_argument('--carla-model', default=False, action='store_true', help='CARLA or Carracing')
-args = parser.parse_args()
+parser.add_argument('--carla_model', default=False, action='store_true', help='CARLA or Carracing')
 
 Model = VAE
 
-def main():
+def main(args):
     seed_everything(args.seed)
     
     # create directories
@@ -74,17 +74,21 @@ def main():
 
                 batch_count += 1
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True) # from torch.Size([10, 5, 3, 64, 64]) to torch.Size([5, 10, 3, 64, 64])
+
+                if args.number_domains == 10:
+                    imgs = imgs.reshape(-1, *imgs.shape[2:])
+                    imgs = imgs.repeat(2, 1, 1, 1)
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=10, value=[0, 0, 0, 0, 0, 0.1, 0.1, 0.1, 0.1, 0.1])
+                elif args.number_domains == 2: 
+                    imgs = imgs[2:3, :, :, :, :]
+                    imgs = imgs.reshape(-1, *imgs.shape[2:])
+                    imgs = imgs.repeat(2, 1, 1, 1)
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
+                elif args.number_domains == None and args.random_augmentations:
+                    imgs = RandomTransform(imgs).apply_transformations_stack(num_frames=1, nb_class=5, value=0.3)
+
                 imgs = imgs.reshape(-1, *imgs.shape[2:])
-                if args.stack_frames:
-                    imgs = imgs.repeat(1, args.img_stack, 1, 1)
-                    if args.random_augmentations:
-                        imgs = RandomTransform(imgs).apply_transformations_stack(num_frames=args.img_stack, nb_class=5, value=0.3)
-                else:
-                    if args.random_augmentations:
-                        imgs = RandomTransform(imgs).apply_transformations_stack(num_frames=1, nb_class=5, value=0.3)
-                        #imgs = RandomTransform(imgs).apply_transformations(nb_class=5, value=0.3)
-                        imgs = imgs.reshape(-1, *imgs.shape[2:]) # from torch.Size([5, 10, 3, 64, 64]) to torch.Size([50, 3, 64, 64])
-                    save_image(imgs, os.path.join(log_dir,'see_transform.png'))
+                save_image(imgs, os.path.join(log_dir,'see_transform.png'))
 
                 optimizer.zero_grad()
                 loss = compute_loss(imgs, model, args.beta)
@@ -102,17 +106,13 @@ def main():
                         recon_imgs1 = model.decoder(mu)
 
                     saved_imgs = torch.cat([imgs, recon_imgs1], dim=0)
-                    if args.stack_frames:
-                        save_image(saved_imgs[:, :3, :, :], os.path.join(log_dir,'stack_%d_%d_%d.png' % (i_epoch, i_split, i_batch)), nrow=10)
-                        torch.save(model.state_dict(), os.path.join(log_dir, "model_vae_stack.pt"))
-                        torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_vae_stack.pt"))
-                    else:
-                        save_image(saved_imgs, os.path.join(log_dir,'%d_%d_%d.png' % (i_epoch, i_split, i_batch)), nrow=10)
-                        torch.save(model.state_dict(), os.path.join(log_dir, "model_vae_test.pt"))
-                        torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_vae_test.pt"))
+                    save_image(saved_imgs, os.path.join(log_dir,'%d_%d_%d.png' % (i_epoch, i_split, i_batch)), nrow=10)
+                    torch.save(model.state_dict(), os.path.join(log_dir, "model_vae.pt"))
+                    torch.save(model.encoder.state_dict(), os.path.join(log_dir, "encoder_vae.pt"))
 
             # load next splitted data
-            updateloader(loader, dataset)
+            updateloader(args, loader, dataset)
 
 if __name__ == '__main__':
-    main()
+    args = parser.parse_args()
+    main(args)

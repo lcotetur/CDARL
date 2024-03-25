@@ -38,6 +38,7 @@ from torch.utils.data import TensorDataset
 import torch.optim as optim
 from tqdm.auto import tqdm
 import numpy as np
+from functools import lru_cache
 
 
 def gaussian_log_prob(mean, log_std, samples):
@@ -187,8 +188,6 @@ class ENCOGraphLearning:
     def learn_graph(self, dist_dataset, graph_dataset=None, num_epochs=40):
         if not graph_dataset:
             graph_dataset = dist_dataset
-        print(dist_dataset.shape)
-        print(graph_dataset.shape)
         dist_data_loader = torch.utils.data.DataLoader(dist_dataset, batch_size=512, shuffle=True)
         graph_data_loader = torch.utils.data.DataLoader(graph_dataset, batch_size=256, shuffle=True)
         self.prepare_latent_statistics(dist_dataset)

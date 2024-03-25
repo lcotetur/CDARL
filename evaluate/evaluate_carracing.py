@@ -23,17 +23,18 @@ from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordCon
 parser = argparse.ArgumentParser()
 parser.add_argument('--algo', default='clean_rl', type=str)
 parser.add_argument('--env_name', default="CarRacing-v0", type=str)
-parser.add_argument('--repr', default='cycle_vae', type=str)
+parser.add_argument('--repr', default='ilcm', type=str)
 parser.add_argument('--number', default=0, type=int)
 parser.add_argument('--use_encoder', default=True, action='store_true')
-parser.add_argument('--model_path', default='/home/mila/l/lea.cote-turcotte/CDARL/logs/cycle_vae/2024-01-30_1/policy.pt', type=str)
-parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carracing/2023-11-20/encoder_cycle_vae.pt', type=str)
-parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-03/model_step_140000.pt', type=str)
+parser.add_argument('--model_path', default='/home/mila/l/lea.cote-turcotte/CDARL/carracing_logs/ilcm/2024-03-21_0/policy.pt', type=str)
+parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-17/model_reduce_dim_step_400000.pt', type=str)
+parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-19_ilcm/model.pt', type=str)
 parser.add_argument('--ilcm_encoder_type', default='conv', type=str)
 parser.add_argument('--save_path', default='/home/mila/l/lea.cote-turcotte/CDARL/results/carracing', type=str)
 parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
 parser.add_argument('--num_episodes', default=100, type=int)
-parser.add_argument('--latent_size', default=32, type=int)
+parser.add_argument('--latent_size', default=6, type=int)
+parser.add_argument('--reduce_dim_latent_size', default=16, type=int)
 parser.add_argument('--action_repeat', default=4, type=int)
 parser.add_argument('--img_stack', type=int, default=4, metavar='N', help='stack N image in a state (default: 4)')
 parser.add_argument('--save_video', default=False, action='store_true')
@@ -126,7 +127,7 @@ def create_model_reduce_dim():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=32,
+            dim_z=args.reduce_dim_latent_size,
             )
     return model
 
@@ -137,7 +138,7 @@ def create_img_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=32,
+            dim_z=args.reduce_dim_latent_size,
             min_std=0.2,
         )
 
@@ -148,7 +149,7 @@ def create_img_encoder_decoder():
         encoder = ImageEncoder(
                 in_resolution=64,
                 in_features=3,
-                out_features=32,
+                out_features=args.reduce_dim_latent_size,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -160,7 +161,7 @@ def create_img_encoder_decoder():
                 permutation=0,
                 )
         decoder = ImageDecoder(
-                in_features=32,
+                in_features=args.reduce_dim_latent_size,
                 out_resolution=64,
                 out_features=3,
                 hidden_features=32,
@@ -178,7 +179,7 @@ def create_img_encoder_decoder():
         encoder = Encoder3dshapes(
                 in_resolution=64,
                 in_features=3,
-                out_features=32,
+                out_features=args.reduce_dim_latent_size,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -190,7 +191,7 @@ def create_img_encoder_decoder():
                 permutation=0,
                 )
         decoder = Decoder3dshapes(
-                in_features=32,
+                in_features=args.reduce_dim_latent_size,
                 out_resolution=64,
                 out_features=3,
                 hidden_features=32,
@@ -220,7 +221,7 @@ def create_ilcm():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=6,
+            dim_z=args.latent_size,
             )
 
     return model
@@ -239,16 +240,16 @@ def create_mlp_encoder_decoder():
 
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
-                input_features=32,
-                output_features=6,
+                input_features=args.reduce_dim_latent_size,
+                output_features=args.latent_size,
                 fix_std=False,
                 init_std=0.01,
                 min_std=0.0001,
             )
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
-                input_features=6,
-                output_features=32,
+                input_features=args.latent_size,
+                output_features=args.reduce_dim_latent_size,
                 fix_std=True,
                 init_std=1.0,
                 min_std=0.001,
@@ -265,7 +266,7 @@ def create_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=6,
+            dim_z=args.latent_size,
             min_std=0.2,
         )
     return scm
@@ -421,9 +422,9 @@ def main():
         elif domain == args.nb_domain - 1:
             color = 0.5
         elif domain == args.nb_domain - 2:
-            color = -0.2
+            color = -0.3 #Try with -0.4 (rouge)
         else:
-            color = -0.3
+            color = -0.2 
         print(color, crop)
         results = []
         for i in range(args.num_episodes):

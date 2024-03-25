@@ -1,16 +1,30 @@
 name: carracing
 data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data'
+data_dir_ilcm: '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-17'
 save_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing
-encoder_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2023-11-21/model_step_188000.pt
+encoder_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-17/model_reduce_dim_step_400000.pt
 data_tag: 'car'
 num_splitted: 10
 num_workers: 4
 
 training:
-  batchsize: 6
-  random_augmentations: True
+  random_augmentations: False
   epochs: 2
+  shuffle: True
+  batchsize: 10
+  encoder: 'conv'
+  intervention: 'style'
+  number_domains: 10
+
+  log_every_n_steps: 20000
+  print_every_n_steps: 5000
+  validate_every_n_steps: 0
+  plot_every_n_steps: 5000
+  save_model_every_n_steps: 10000
+
+model:
+  dim_z: 16
 
 dim_x: [3, 64, 64]
-dim_z: 32
+dim_z: 16
 noise: 0

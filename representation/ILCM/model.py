@@ -1240,10 +1240,11 @@ class BasicDecoderCarla(nn.Module):
         """Given latent, compute mean and std"""
         if self.permutation is not None:
             x = x[:, self.permutation]
-
         hidden = self.elementwise(x)
         hidden = self.mlp(hidden)
-        hidden = self.net(hidden[:, :, None, None])
+        hidden = hidden[:, :, None, None]
+        hidden = torch.reshape(hidden, (-1,256,6,6))
+        hidden = self.net(hidden)
         mean, std = vector_to_gaussian(hidden, fix_std=self.fix_std, min_std=self.min_std)
         return mean, std
 
@@ -1435,12 +1436,6 @@ class Decoder3dshapes(nn.Module):
 
         self.fix_std = fix_std
         self.register_buffer("min_std", torch.tensor(min_std))
-
-    #def forward(self, x):
-        #x = self.fc(x)
-        #x = x.unsqueeze(-1).unsqueeze(-1)
-        #x = self.main(x)
-        #return x
 
     def forward(self, x, eval_likelihood_at=None, deterministic=False, return_mean=False, return_std=False, full=True, reduction="sum"):
         """

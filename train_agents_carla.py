@@ -20,29 +20,30 @@ import warnings
 from CDARL.utils import seed_everything, create_logs 
 from model import CarlaLatentPolicy, CarlaImgPolicy
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
-from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, CoordConv2d, GaussianEncoder
+from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, CoordConv2d, GaussianEncoder, BasicEncoderCarla, BasicDecoderCarla
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--repr', default='ilcm', type=str) #ilcm
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-14_1_reduce_dim/model_step_50000.pt')#'/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carla/2024-02-15/encoder_adagvae.pt')
-parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-15/model_step_50000.pt')#'/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-01-26/model_step_50000.pt')
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_1/model.pt')#'/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-12_1/model_step_50000.pt')
+parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_ilcm/model.pt')
 parser.add_argument('--ilcm-encoder', default='conv')
 parser.add_argument('--save-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/carla_logs', type=str)
 parser.add_argument('--max-steps', default=int(2e5), type=int)
-parser.add_argument('--weather', default=1, type=int)
-parser.add_argument('--eval-weather', default=2, type=int)
+parser.add_argument('--weather', default=2, type=int)
 parser.add_argument('--action-repeat', default=1, type=int)
 parser.add_argument('--use-encoder', default=True, action='store_true')
 parser.add_argument('--lr', default=0.0005, type=float)
 parser.add_argument('--port', default=2000, type=int)
 parser.add_argument('--seed', default=0, type=int)
 parser.add_argument('--tag', default=None, type=str)
-parser.add_argument('--latent-size', default=16, type=int, help='dimension of latent state embedding')
+parser.add_argument('--latent-size', default=10, type=int, help='dimension of latent state embedding')
+parser.add_argument('--reduce_dim_latent_size', default=16, type=int)
+parser.add_argument('--class-latent-size', default=8, type=int)
 args = parser.parse_args()
 
 weathers = [carla.WeatherParameters.ClearNoon, carla.WeatherParameters.HardRainNoon, carla.WeatherParameters(50, 0, 0, 0.35, 0, -40)]
 weather = weathers[args.weather]
-eval_weather = weathers[args.eval_weather]
+#weather = carla.WeatherParameters.HardRainNoon
 start_point = (75, -10, 2.25)
 end_point = (5, -242, 2.25)
 
@@ -75,44 +76,14 @@ params = {
     'start_point': start_point,
     'end_point': end_point,
     'weather': weather,
-    'ip': 'localhost'
+    'ip': 'localhost',
+    'seed': args.seed
 }
-
-params_eval = {
-    'number_of_vehicles': 0,
-    'number_of_walkers': 0,
-    'display_size': 256,  # screen size of bird-eye render
-    'max_past_step': 1,  # the number of past steps to draw
-    'dt': 0.1,  # time interval between two frames
-    'discrete': False,  # whether to use discrete control space
-    'discrete_acc': [-3.0, 0.0, 3.0],  # discrete value of accelerations
-    'discrete_steer': [-0.2, 0.0, 0.2],  # discrete value of steering angles
-    'continuous_accel_range': [-3.0, 3.0],  # continuous acceleration range
-    'continuous_steer_range': [-0.3, 0.3],  # continuous steering angle range
-    'ego_vehicle_filter': 'vehicle.lincoln*',  # filter for defining ego vehicle
-    'port': args.port,  # connection port
-    'town': 'Town07',  # which town to simulate
-    # 'task_mode': 'random',  # removed
-    'max_time_episode': 800,  # maximum timesteps per episode
-    'max_waypt': 12,  # maximum number of waypoints
-    'obs_range': 16,  # observation range (meter)
-    'lidar_bin': 0.125,  # bin size of lidar sensor (meter)
-    'd_behind': 12,  # distance behind the ego vehicle (meter)
-    'out_lane_thres': 2.0,  # threshold for out of lane
-    'desired_speed': 5,  # desired speed (m/s)
-    'max_ego_spawn_times': 1,  # maximum times to spawn ego vehicle
-    'display_route': True,  # whether to render the desired route
-    'pixor_size': 64,  # size of the pixor labels
-    'pixor': True,  # whether to output PIXOR observation
-    'start_point': start_point,
-    'end_point': end_point,
-    'weather': eval_weather,
-    'ip': 'localhost'
-} 
 
 class VecGymCarla:
     def __init__(self, env, action_repeat, encoder=None, causal=None):
         self.env = env
+        self.env.seed(args.seed)
         self.action_repeat = action_repeat
         self.encoder = encoder
         self.causal = causal
@@ -194,7 +165,7 @@ def create_model_reduce_dim():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=32,
+            dim_z=args.reduce_dim_latent_size,
             )
     return model
 
@@ -205,7 +176,7 @@ def create_img_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=32,
+            dim_z=args.reduce_dim_latent_size,
             min_std=0.2,
         )
 
@@ -216,7 +187,7 @@ def create_img_encoder_decoder():
         encoder = ImageEncoderCarla(
                 in_resolution=128,
                 in_features=3,
-                out_features=32,
+                out_features=args.reduce_dim_latent_size,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -228,7 +199,7 @@ def create_img_encoder_decoder():
                 permutation=0,
                 )
         decoder = ImageDecoderCarla(
-                in_features=32,
+                in_features=args.reduce_dim_latent_size,
                 out_resolution=128,
                 out_features=3,
                 hidden_features=32,
@@ -246,7 +217,7 @@ def create_img_encoder_decoder():
         encoder = BasicEncoderCarla(
                 in_resolution=128,
                 in_features=3,
-                out_features=32,
+                out_features=args.reduce_dim_latent_size,
                 hidden_features=32,
                 batchnorm=False,
                 conv_class=CoordConv2d,
@@ -258,7 +229,7 @@ def create_img_encoder_decoder():
                 permutation=0,
                 )
         decoder = BasicDecoderCarla(
-                in_features=32,
+                in_features=args.reduce_dim_latent_size,
                 out_resolution=128,
                 out_features=3,
                 hidden_features=32,
@@ -288,7 +259,7 @@ def create_ilcm():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=16,
+            dim_z=args.latent_size,
             )
 
     return model
@@ -307,16 +278,16 @@ def create_mlp_encoder_decoder():
 
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
-                input_features=32,
-                output_features=16,
+                input_features=args.reduce_dim_latent_size,
+                output_features=args.latent_size,
                 fix_std=False,
                 init_std=0.01,
                 min_std=0.0001,
             )
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
-                input_features=16,
-                output_features=32,
+                input_features=args.latent_size,
+                output_features=args.reduce_dim_latent_size,
                 fix_std=True,
                 init_std=1.0,
                 min_std=0.001,
@@ -333,7 +304,7 @@ def create_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=16,
+            dim_z=args.latent_size,
             min_std=0.2,
         )
     return scm
@@ -371,9 +342,9 @@ class EncoderD(nn.Module):
             nn.Conv2d(128, 256, 4, stride=2), nn.ReLU()
         )
 
-        self.linear_mu = nn.Linear(flatten_size, content_latent_size)
-        self.linear_logsigma = nn.Linear(flatten_size, content_latent_size)
-        self.linear_classcode = nn.Linear(flatten_size, class_latent_size) 
+        self.linear_mu = nn.Linear(9216, content_latent_size)
+        self.linear_logsigma = nn.Linear(9216, content_latent_size)
+        self.linear_classcode = nn.Linear(9216, class_latent_size) 
 
     def forward(self, x):
         x = self.main(x/255)
@@ -402,7 +373,7 @@ def main():
             encoder.load_state_dict(weights)
         elif args.repr == 'ilcm':
             print('causal')
-            latent_size = 16
+            latent_size = args.latent_size
             encoder = create_model_reduce_dim()
             main = create_ilcm()
             # saved checkpoints could contain extra weights such as linear_logsigma 
@@ -421,8 +392,8 @@ def main():
             main.load_state_dict(weights)
             print("Loaded Weights Main")
         elif args.repr == 'disent':
-            class_latent_size = 16
-            content_latent_size = 32
+            class_latent_size = args.class_latent_size
+            content_latent_size = 16
             encoder = EncoderD(class_latent_size, content_latent_size)
             weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
             for k in list(weights.keys()):
@@ -432,11 +403,11 @@ def main():
 
     carla_env = gym.make('carla-v0', params=params)
     env = VecGymCarla(carla_env, args.action_repeat, encoder, main)
-    #carla_eval = gym.make('carla-v0', params=params_eval)
-    #eval_env = VecGymCarla(carla_eval, args.action_repeat, encoder)
 
     log_dir = create_logs(args, algo_name=True, repr=args.repr)
     os.makedirs(log_dir, exist_ok=True)
+
+    print('Training on weather%d' % args.weather)
 
     # prepare config
     config = Config()
@@ -461,6 +432,7 @@ def main():
     config.save_interval = 10000 
     config.memory_on_gpu = True
     config.save_path = log_dir
+    config.seed = args.seed
     #config.update(args)
     config.after_set()
     print(config)
@@ -471,7 +443,7 @@ def main():
         input_dim = args.latent_size+1  # 16+1 in paper
     else:
         Model = CarlaImgPolicy
-        input_dim = args.latent_size+1  # 128+1 in paper (16 is too small)
+        input_dim = 128+1  # 128+1 in paper (16 is too small)
     model = Model(input_dim, 2).to(config.device)
 
     # create ppo agent and run
