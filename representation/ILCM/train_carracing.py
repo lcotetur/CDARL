@@ -226,8 +226,6 @@ def train(cfg, model, results, log_dir):
 
                 fractional_epoch = step / steps_per_epoch
 
-                
-
                 #style
                 if cfg.data.training.intervention == 'style':
                     if cfg.data.training.number_domains == 10:

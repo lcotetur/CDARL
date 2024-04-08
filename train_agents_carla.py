@@ -24,8 +24,8 @@ from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--repr', default='ilcm', type=str) #ilcm
-parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_1/model.pt')#'/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-12_1/model_step_50000.pt')
-parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_ilcm/model.pt')
+parser.add_argument('--encoder-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-12_1/model_step_50000.pt')
+parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-13_ilcm/model.pt')
 parser.add_argument('--ilcm-encoder', default='conv')
 parser.add_argument('--save-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/carla_logs', type=str)
 parser.add_argument('--max-steps', default=int(2e5), type=int)

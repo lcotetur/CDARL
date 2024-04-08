@@ -20,10 +20,12 @@ import os
 import yaml
 from functools import lru_cache
 
+from CDARL.data.shapes3d_data import Shape3dDataset
 from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
 from torchvision.utils import save_image
 
 from experiment_utils import (
+    initialize_experiment,
     save_model,
     logger,
     create_optimizer_and_scheduler,
@@ -259,7 +261,10 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
     transform = transforms.Compose([transforms.ToTensor()])
     dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
     loader = get_dataloader(cfg, dataset)
+    #train_loader = get_dataloader_test(cfg, "test", batchsize=cfg.training.batchsize, shuffle=True)
+    #val_loader = get_dataloader_test(cfg, "val", batchsize=cfg.eval.batchsize, shuffle=False, include_noise_encodings=False)
     steps_per_epoch = len(loader)
+    print(len(loader))
 
     # GPU
     model = model.to(device)
@@ -280,6 +285,7 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
 
         for i_split in range(cfg.data.num_splitted):
             for i_batch, imgs in enumerate(loader):
+            #for z1, z2 in train_loader:
 
                 if step/1000 % 10 == 0:
                     model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
@@ -307,7 +313,7 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
 
                 z1, z2 = (z1.to(device), z2.to(device))
 
-                # Model forward pass
+                        # Model forward pass
                 log_prob, model_outputs = model(
                             z1,
                             z2,
@@ -323,7 +329,7 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                             **graph_kwargs,
                         )
 
-                # Loss and metrics
+                    # Loss and metrics
                 loss, metrics = criteria(
                             log_prob,
                             z_regularization_amount=z_regularization_amount,
@@ -335,20 +341,20 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                             **model_outputs,
                         )
 
-                # Optimizer step
+                    # Optimizer step
                 finite, grad_norm = optimizer_step(cfg, loss, model, model_outputs, optim, z1, z2)
                 if not finite:
                     nan_counter += 1
 
-                # Validation loop
-                #if frequency_check(step, cfg.training.validate_every_n_steps):
+                    # Validation loop
+                    #if frequency_check(step, cfg.training.validate_every_n_steps):
                         #validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device)
 
-                # Log loss and metrics
+                    # Log loss and metrics
                 step += 1
-                #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
+                    #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
 
-            # Save model checkpoint
+                    # Save model checkpoint
             if frequency_check(step, cfg.data.training.save_model_every_n_steps):
                 save_model(log_dir, model, f"model_step_{step}_{epoch}.pt")
                 imgs1 = x1
@@ -405,6 +411,16 @@ def updateloader(cfg, loader, dataset):
     dataset.loadnext()
     loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
     return loader
+
+def get_dataloader_test(cfg, tag, batchsize=None, shuffle=False, include_noise_encodings=False):
+    """Load data from disk and return DataLoader instance"""
+    filename = Path(cfg.data.data_dir_ilcm) / f"{tag}_carracing_encoded.pt"
+    data = torch.load(filename)
+    print(len(data))
+    dataset = TensorDataset(*data)
+    dataloader = DataLoader(dataset, batch_size=batchsize, shuffle=shuffle)
+
+    return dataloader
 
 def encode_data(cfg, imgs, model_reduce_dim, device):
     #style
@@ -467,21 +483,6 @@ def encode_data(cfg, imgs, model_reduce_dim, device):
 
     x1 = imgs[0]
     x2 = imgs[1]
-    """
-
-    #content
-    imgs = imgs.to(device, non_blocking=True)
-    imgs = imgs.reshape(-1, *imgs.shape[2:])
-    imgs = imgs.repeat(2, 1, 1, 1)
-
-    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, 0.1])
-    imgs = imgs.permute(1,0,2,3,4)
-    m = int(imgs.shape[0]/2)
-    feature_1 = imgs[:m]
-    x1 = feature_1.reshape(-1, *imgs.shape[2:])
-    feature_2 = imgs[m:]
-    x2 = feature_2.reshape(-1, *imgs.shape[2:])
-    """
     
     x1, x2 = (x1.to(device), x2.to(device))
     with torch.no_grad():

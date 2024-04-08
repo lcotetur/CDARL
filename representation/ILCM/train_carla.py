@@ -60,7 +60,7 @@ def main(cfg):
     load_checkpoint(cfg, model)
     train(cfg, model, results, log_dir)
     #save_model(log_dir, model)
-    save_representations(cfg, log_dir, model)
+    #save_representations(cfg, log_dir, model)
 
     # Save results
     results.save_logs(cfg.data.save_path, str(date.today()))
@@ -241,39 +241,26 @@ def train(cfg, model, results, log_dir):
         for i_split in range(cfg.data.num_splitted):
             for i_batch, imgs in enumerate(loader):
 
-
                 fractional_epoch = step / steps_per_epoch
 
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
-                
-                # Content
-                imgs_content = imgs.permute(1,0,2,3,4).repeat(2, 1, 1, 1, 1)
-                m = int(imgs_content.shape[0]/2)
-                imgs_content1 = imgs_content[:m, :, :, :, :]
-                imgs_content2 = imgs_content[:m, :, :, :, :]
-                imgs_content1 = imgs_content1[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]].view(imgs_content1.size())
-                imgs_content2 = imgs_content2[[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]].view(imgs_content2.size())
+                if cfg.data.training.intervention == 'style':
+                    imgs = imgs.reshape(-1, *imgs.shape[2:])
+                    imgs = imgs.repeat(2, 1, 1, 1)
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.1])
+                    x1 = imgs[0]
+                    x2 = imgs[1]
+                if cfg.data.training.intervention == 'content':
+                    imgs_content = imgs.permute(1,0,2,3,4).repeat(2, 1, 1, 1, 1)
+                    m = int(imgs_content.shape[0]/2)
+                    imgs_content1 = imgs_content[:m, :, :, :, :]
+                    imgs_content2 = imgs_content[:m, :, :, :, :]
+                    imgs_content1 = imgs_content1[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]].view(imgs_content1.size())
+                    imgs_content2 = imgs_content2[[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]].view(imgs_content2.size())
 
-                imgs_content1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
-                imgs_content2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
+                    x1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
+                    x2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
 
-                # Style
-                '''
-                imgs_style = imgs.repeat(2, 1, 1, 1, 1)
-                n = int(imgs_style.shape[0]/2)
-                imgs_style1 = imgs_style[:n, :, :, :, :]
-                imgs_style2 = imgs_style[n:, :, :, :, :]
-                idx = torch.randperm(3)
-                imgs_style1 = imgs_style1[idx].view(imgs_style1.size())
-                imgs_style1= imgs_style1.reshape(-1, *imgs_style1.shape[2:])
-                imgs_style2= imgs_style2.reshape(-1, *imgs_style2.shape[2:])
-
-                x1 = torch.cat((imgs_style1, imgs_content1), dim=0)
-                x2 = torch.cat((imgs_style2, imgs_content2), dim=0)
-                '''
-
-                x1 = imgs_content1
-                x2 = imgs_content2
                 save_image(torch.cat((x1, x2), dim=0), os.path.join(log_dir,'features.png'), nrow=10)
 
                 model.train()
@@ -391,19 +378,26 @@ def save_representations(cfg, log_dir, model):
         for i_split in range(cfg.data.num_splitted):
             for imgs in dataloader:
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
+                if cfg.data.training.intervention == 'style':
+                    imgs = imgs[0:3, :, :, :, :]
+                    imgs = imgs.reshape(-1, *imgs.shape[2:])
+                    imgs = imgs.repeat(2, 1, 1, 1)
+                    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.1])
+                    x0 = imgs[0]
+                    x1 = imgs[1]
+                if cfg.data.training.intervention == 'content':
+                    imgs_content = imgs.permute(1,0,2,3,4).repeat(2, 1, 1, 1, 1)
+                    m = int(imgs_content.shape[0]/2)
+                    imgs_content1 = imgs_content[:m, :, :, :, :]
+                    imgs_content2 = imgs_content[:m, :, :, :, :]
+                    imgs_content1 = imgs_content1[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]].view(imgs_content1.size())
+                    imgs_content2 = imgs_content2[[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]].view(imgs_content2.size())
 
-                imgs_content = imgs.permute(1,0,2,3,4).repeat(2, 1, 1, 1, 1)
-                m = int(imgs_content.shape[0]/2)
-                imgs_content1 = imgs_content[:m, :, :, :, :]
-                imgs_content2 = imgs_content[:m, :, :, :, :]
-                imgs_content1 = imgs_content1[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]].view(imgs_content1.size())
-                imgs_content2 = imgs_content2[[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]].view(imgs_content2.size())
+                    imgs_content1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
+                    imgs_content2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
 
-                imgs_content1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
-                imgs_content2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
-
-                x0 = imgs_content1
-                x1 = imgs_content2
+                    x0 = imgs_content1
+                    x1 = imgs_content2
 
                 x0, x1 = x0.to(device), x1.to(device)
 

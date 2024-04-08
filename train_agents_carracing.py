@@ -24,8 +24,8 @@ from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordCon
 parser = argparse.ArgumentParser(description='Train a PPO agent for the CarRacing-v0')
 parser.add_argument('--repr', default='ilcm', type=str)
 parser.add_argument('--use_encoder', default=True, action='store_true')
-parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-17/model_reduce_dim_step_400000.pt', type=str)
-parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-19_ilcm/model_step_320000_20.pt', type=str)
+parser.add_argument('--encoder_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-26/model_reduce_dim_step_400000.pt', type=str)
+parser.add_argument('--ilcm_path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-26_ilcm/model_step_120000_0.pt', type=str)
 parser.add_argument('--ilcm_encoder_type', default='conv', type=str)
 parser.add_argument('--save_dir', default='/home/mila/l/lea.cote-turcotte/CDARL/carracing_logs', type=str)
 parser.add_argument('--algo', default='clean_rl', type=str)
@@ -52,7 +52,7 @@ parser.add_argument('--anneal_lr', default=False, type=bool)
 parser.add_argument('--norm_adv', default=True, type=bool)
 parser.add_argument('--clip_vloss', default=True, type=bool)
 parser.add_argument('--target_kl', default=None, type=float)
-parser.add_argument('--latent_size', default=6, type=int)
+parser.add_argument('--latent_size', default=10, type=int)
 parser.add_argument('--reduce_dim_latent_size', default=16, type=int)
 parser.add_argument('--log_interval', default=10, type=int)
 args = parser.parse_args()
@@ -404,13 +404,17 @@ if __name__ == "__main__":
     main = None
     train_encoder = False
     if args.use_encoder:
-        if args.repr == 'cycle_vae' or args.repr == 'vae' or args.repr == 'adagvae':
+        if args.repr == 'cycle_vae' or args.repr == 'vae' or args.repr == 'adagvaee':
             encoder = Encoder(latent_size = args.latent_size)
             weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
             for k in list(weights.keys()):
                 if k not in encoder.state_dict().keys():
                     del weights[k]
             encoder.load_state_dict(weights)
+        ## temporary fix for runs to remove
+        elif args.repr == 'adagvae':
+            encoder = 1
+        ## temporary fix for runs to remove
         elif args.repr == 'ilcm':
             print('causal')
             latent_size = 16
