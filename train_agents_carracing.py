@@ -75,9 +75,9 @@ class Env():
         if self.causal:
             self.causal = self.causal.to(self.device)
         if self.encoder:
-            self.observation_space = spaces.Box(low=-1000, high=1000, shape=(args.latent_size*self.img_stack,), dtype=np.float)
+            self.observation_space = spaces.Box(low=-1000, high=1000, shape=(args.latent_size*self.img_stack,), dtype=np.float64)
         else:
-            self.observation_space = spaces.Box(low=0, high=255, shape=(3*self.img_stack,64,64), dtype=np.float)
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3*self.img_stack,64,64), dtype=np.float64)
         self.action_space = self.env.action_space
 
     def process_state(self, obs):
@@ -404,17 +404,13 @@ if __name__ == "__main__":
     main = None
     train_encoder = False
     if args.use_encoder:
-        if args.repr == 'cycle_vae' or args.repr == 'vae' or args.repr == 'adagvaee':
+        if args.repr == 'cycle_vae' or args.repr == 'vae' or args.repr == 'adagvae':
             encoder = Encoder(latent_size = args.latent_size)
             weights = torch.load(args.encoder_path, map_location=torch.device('cpu'))
             for k in list(weights.keys()):
                 if k not in encoder.state_dict().keys():
                     del weights[k]
             encoder.load_state_dict(weights)
-        ## temporary fix for runs to remove
-        elif args.repr == 'adagvae':
-            encoder = 1
-        ## temporary fix for runs to remove
         elif args.repr == 'ilcm':
             print('causal')
             latent_size = 16
@@ -472,6 +468,7 @@ if __name__ == "__main__":
     episode_lenght = 0
     episode = 0
     running_score = 0
+    best_running_score = 0
 
     for iteration in range(1, args.num_iterations + 1):
         # Annealing the rate if instructed to do so.
@@ -506,9 +503,11 @@ if __name__ == "__main__":
                 if episode % args.log_interval == 0:
                     print('Ep {}\tLast score: {:.2f}\tMoving average score: {:.2f}'.format(episode, total_reward, running_score))
                     results.update_logs(["episode", "running_score", "episodic_return", "training_time"], [episode, running_score, total_reward, int(global_step / (time.time() - start_time))])
-                    torch.save(agent.state_dict(), os.path.join(log_dir, "policy.pt"))
                     results.save_logs(log_dir)
                     results.generate_plot(log_dir, log_dir)
+                    if best_running_score < running_score:
+                        best_running_score = running_score
+                        torch.save(agent.state_dict(), os.path.join(log_dir, "best_policy.pt"))
                 if episode % 1000 == 0:
                     torch.save(agent.state_dict(), os.path.join(log_dir, "policy_%s.pt" % episode))
 

@@ -4,28 +4,22 @@
 
 import hydra
 import torch
-from torch.utils.data import TensorDataset, Dataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader
 from torchvision import transforms
-import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import trange
 from pathlib import Path
 from collections import defaultdict
 from omegaconf import OmegaConf
-from PIL import Image
-from io import BytesIO
 import json
 from datetime import date
 import os
 import yaml
 from functools import lru_cache
 
-from CDARL.data.shapes3d_data import Shape3dDataset
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
+from CDARL.utils import ExpDataset, RandomTransform, Results, seed_everything
 from torchvision.utils import save_image
 
 from experiment_utils import (
-    initialize_experiment,
     save_model,
     logger,
     create_optimizer_and_scheduler,
@@ -261,10 +255,7 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
     transform = transforms.Compose([transforms.ToTensor()])
     dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
     loader = get_dataloader(cfg, dataset)
-    #train_loader = get_dataloader_test(cfg, "test", batchsize=cfg.training.batchsize, shuffle=True)
-    #val_loader = get_dataloader_test(cfg, "val", batchsize=cfg.eval.batchsize, shuffle=False, include_noise_encodings=False)
     steps_per_epoch = len(loader)
-    print(len(loader))
 
     # GPU
     model = model.to(device)
@@ -285,7 +276,6 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
 
         for i_split in range(cfg.data.num_splitted):
             for i_batch, imgs in enumerate(loader):
-            #for z1, z2 in train_loader:
 
                 if step/1000 % 10 == 0:
                     model_interventions, pretrain, deterministic_intervention_encoder = epoch_schedules(
@@ -347,14 +337,11 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                     nan_counter += 1
 
                     # Validation loop
-                    #if frequency_check(step, cfg.training.validate_every_n_steps):
-                        #validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device)
+                    if frequency_check(step, cfg.training.validate_every_n_steps):
+                        validation_loop(cfg, model, model_reduce_dim, criteria, imgs, best_state, val_metrics, step, device)
 
-                    # Log loss and metrics
                 step += 1
-                    #log_training_step(cfg,beta,epoch_generator,finite,grad_norm,metrics,model,step,train_metrics,nan_counter)
-
-                    # Save model checkpoint
+            # Save model checkpoint
             if frequency_check(step, cfg.data.training.save_model_every_n_steps):
                 save_model(log_dir, model, f"model_step_{step}_{epoch}.pt")
                 imgs1 = x1
@@ -366,13 +353,13 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                 save_image(saved_imgs, path_image, nrow=10)
                 results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
                 results.save_logs(log_dir)
-                #results.generate_plot(log_dir,log_dir)
-                    # save metrics
+                results.generate_plot(log_dir,log_dir)
+                # save metrics
                 update_dict(train_metrics, metrics)
                 with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
                     json.dump(train_metrics, f)
 
-                updateloader(cfg, loader, dataset)
+        updateloader(cfg, loader, dataset)
 
         if scheduler is not None and epoch < cfg.data.training.epochs - 1:
             scheduler.step()
@@ -412,18 +399,7 @@ def updateloader(cfg, loader, dataset):
     loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=True, num_workers=cfg.training.num_workers)
     return loader
 
-def get_dataloader_test(cfg, tag, batchsize=None, shuffle=False, include_noise_encodings=False):
-    """Load data from disk and return DataLoader instance"""
-    filename = Path(cfg.data.data_dir_ilcm) / f"{tag}_carracing_encoded.pt"
-    data = torch.load(filename)
-    print(len(data))
-    dataset = TensorDataset(*data)
-    dataloader = DataLoader(dataset, batch_size=batchsize, shuffle=shuffle)
-
-    return dataloader
-
 def encode_data(cfg, imgs, model_reduce_dim, device):
-    #style
     if cfg.data.training.intervention == 'style':
         if cfg.data.training.number_domains == 10:
             imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)               
@@ -477,7 +453,7 @@ def encode_data(cfg, imgs, model_reduce_dim, device):
             imgs = imgs.to(device, non_blocking=True)
             m = int(imgs.shape[0]/2)
             feature_1 = imgs[:m]
-            x1 = feature_C1.reshape(-1, *imgs.shape[2:])
+            x1 = feature_1.reshape(-1, *imgs.shape[2:])
             feature_2 = imgs[m:]
             x2 = feature_2.reshape(-1, *imgs.shape[2:])
 

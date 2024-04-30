@@ -1,20 +1,16 @@
 import torch
 from torch import optim
-from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
-
-import numpy as np
 import argparse
 from datetime import date
 import json
 import os
 
-from CDARL.data.shapes3d_data import Shape3dDataset
-from CDARL.utils import reparameterize, seed_everything, updateloader
+from CDARL.utils import seed_everything, updateloader
 from CDARL.utils import ExpDataset, RandomTransform
-from cycle_vae import DisentangledVAE, forward_loss, backward_loss, vae_loss
+from cycle_vae import DisentangledVAE, forward_loss, backward_loss
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
@@ -85,7 +81,7 @@ def main(args):
                     imgs = imgs.reshape(-1, *imgs.shape[2:])
                     imgs = imgs.repeat(2, 1, 1, 1)
                     imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.2])
-                elif agrs.number_domains == None and args.random_augmentations:
+                elif args.number_domains == None and args.random_augmentations:
                     imgs = RandomTransform(imgs).apply_random_transformations_stack(num_frames=args.img_stack, nb_class=5, value=0.3)
                         
                 optimizer.zero_grad()
@@ -102,8 +98,6 @@ def main(args):
                 save_image(imgs, os.path.join(log_dir,'input.png'), nrow=10)
                 # batch of 50 imagees with mix classes
                 bloss = backward_loss(imgs, model, device)
-
-                loss = floss + bloss * args.bloss_coef
 
                 (floss + bloss * args.bloss_coef).backward()
                 optimizer.step()

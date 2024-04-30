@@ -10,7 +10,7 @@
 module --quiet load anaconda/3
 
 # 2. Load your environment
-conda activate carla2
+conda activate carla
 
 # 4. Launch your job, tell it to save the model in $SLURM_TMPDIR
 #    and look for the dataset into $SLURM_TMPDIR
@@ -24,32 +24,20 @@ export PYTHONPATH=$PYTHONPATH:${CARLA_ROOT}/PythonAPI/carla/dist/carla-0.9.8-py3
 DISPLAY= carla/CarlaUE4.sh -opengl -carla-port=2000 &
 
 ### CARLA ###
-#DISPLAY= carla/CarlaUE4.sh -opengl -carla-port=2000 & python CDARL/train_agents_carla.py 
-#DISPLAY= carla/CarlaUE4.sh -opengl -carla-port=2000 & python CDARL/train_agents_carla.py --seed 2
+# VAE
+python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr vae --encoder-path <path to encoder> --latent-size 16 
 
-#ILCM
-#python CDARL/train_agents_carla.py --seed 0 --repr ilcm --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-11_1_reduce_dim/model_step_50000.pt --ilcm-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-12/model_step_50000.pt --latent-size 16
-#python CDARL/train_agents_carla.py --seed 1 --repr ilcm --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-11_1_reduce_dim/model_step_50000.pt --ilcm-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-12/model_step_50000.pt --latent-size 16
-#python CDARL/train_agents_carla.py --seed 2 --repr ilcm --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-11_1_reduce_dim/model_step_50000.pt --ilcm-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-02-12/model_step_50000.pt --latent-size 16
+# INVAR CYCLE-VAE
+python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr cycle_vae --encoder-path <path to encoder> --latent-size 16
 
-#VAE
-python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr vae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carla/2024-01-24/encoder_vae.pt --latent-size 16 
-python CDARL/train_agents_carla.py --weather 2 --seed 1 --repr vae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carla/2024-01-24/encoder_vae.pt --latent-size 16
+# DISENT CYCLE-VAE
+python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr disent --encoder-path <path to encoder> --latent-size 24
 
-#CYCLEVAE
-python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr cycle_vae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carla/2024-01-24/encoder_cycle_vae.pt --latent-size 16
-python CDARL/train_agents_carla.py --weather 2 --seed 1 --repr cycle_vae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carla/2024-01-24/encoder_cycle_vae.pt --latent-size 16
-#python CDARL/train_agents_carla.py --seed 2 --repr cycle_vae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carla/2024-01-24/encoder_cycle_vae.pt --latent_size 16
+# ADAGVAE
+python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr adagvae --encoder-path <path to encoder> --latent-size 10
 
-#DISENT
-python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr disent --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carla/2024-01-24/encoder_cycle_vae.pt --latent-size 24
-python CDARL/train_agents_carla.py --weather 2 --seed 1 --repr disent --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carla/2024-01-24/encoder_cycle_vae.pt --latent-size 24
-#python CDARL/train_agents_carla.py --seed 2 --repr disent --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carla/2024-01-24/encoder_cycle_vae.pt --latent-size 24
+# ILCM
+python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr ilcm --encoder-path <path to encoder> --latent-size 16 --reduce_dim_latent_size 32 
 
-#ADAGVAE
-#DISPLAY= carla/CarlaUE4.sh & python CDARL/train_agents_carla.py --weather 2 --seed 0 --repr adagvae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carla/2024-03-12/encoder_adagvae.pt --latent-size 10
-#python CDARL/train_agents_carla.py --weather 2 --seed 1 --repr adagvae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carla/2024-03-12/encoder_adagvae.pt --latent-size 10
-#python CDARL/train_agents_carla.py --seed 2 --repr adagvae --encoder-path /home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carla/2024-03-12/encoder_adagvae.pt --latent-size 16
-
-#python CDARL/train_agents_carla.py --weather 2 --seed 1
-python CDARL/train_agents_carla.py --weather 2 --seed 2
+# PIXEL-PPO
+python CDARL/train_agents_carla.py --weather 2 --seed 1

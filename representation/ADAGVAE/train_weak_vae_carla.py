@@ -1,19 +1,17 @@
 import torch
 from torch import optim
-from torch.nn import functional as F
 #from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
 from tqdm import trange
 
-import numpy as np
 from datetime import date
 import json
 import argparse
 import os
 
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform, seed_everything, updateloader
+from CDARL.utils import ExpDataset, seed_everything, updateloader
 from weak_vae import CarlaADAGVAE, compute_loss
 
 parser = argparse.ArgumentParser()
@@ -70,7 +68,6 @@ def main():
                 batch_count += 1
                 imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
                 
-                # Content
                 imgs_content = imgs.permute(1,0,2,3,4).repeat(2, 1, 1, 1, 1)
                 m = int(imgs_content.shape[0]/2)
                 imgs_content1 = imgs_content[:m, :, :, :, :]
@@ -80,20 +77,7 @@ def main():
 
                 feature_1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
                 feature_2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
-                '''
-                # Style
-                imgs_style = imgs.repeat(2, 1, 1, 1, 1)
-                n = int(imgs_style.shape[0]/2)
-                imgs_style1 = imgs_style[:n, :, :, :, :]
-                imgs_style2 = imgs_style[n:, :, :, :, :]
-                idx = torch.randperm(3)
-                imgs_style1 = imgs_style1[idx].view(imgs_style1.size())
-                imgs_style1= imgs_style1.reshape(-1, *imgs_style1.shape[2:])
-                imgs_style2= imgs_style2.reshape(-1, *imgs_style2.shape[2:])
 
-                feature_1 = torch.cat((imgs_style1, imgs_content1), dim=0)
-                feature_2 = torch.cat((imgs_style2, imgs_content2), dim=0)
-                '''
                 save_image(torch.cat((feature_1, feature_2), dim=0), os.path.join(log_dir,'features.png'), nrow=10)
 
                 optimizer.zero_grad()

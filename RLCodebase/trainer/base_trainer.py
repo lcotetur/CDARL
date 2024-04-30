@@ -22,6 +22,7 @@ class BaseTrainer():
                 print("Done steps: ", self.done_steps)
                 self.logger.print_last_rewards()
                 self.logger.save_logs()
+                self.logger.save_plot()
 
             if self.config.intermediate_eval and self.done_steps % self.config.eval_interval == 0:
                 self.eval()

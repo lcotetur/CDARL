@@ -105,3 +105,22 @@ class CarlaImgPolicy(nn.Module):
         entropy = self.dist.entropy().sum(-1)
         value = self.critic(x2)
         return action*2-1, action_log_prob, value.squeeze(-1), entropy
+
+class CURLHead(nn.Module):
+	def __init__(self, encoder):
+		super().__init__()
+		self.encoder = encoder
+		self.W = nn.Parameter(torch.rand(encoder.out_dim, encoder.out_dim))
+
+	def compute_logits(self, z_a, z_pos):
+		"""
+		Uses logits trick for CURL:
+		- compute (B,B) matrix z_a (W z_pos.T)
+		- positives are all diagonal elements
+		- negatives are all other elements
+		- to compute loss use multiclass cross entropy with identity matrix for labels
+		"""
+		Wz = torch.matmul(self.W, z_pos.T)  # (z_dim,B)
+		logits = torch.matmul(z_a, Wz)  # (B,B)
+		logits = logits - torch.max(logits, 1)[0][:, None]
+		return logits

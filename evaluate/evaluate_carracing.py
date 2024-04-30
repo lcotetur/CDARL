@@ -13,10 +13,10 @@ import numpy as np
 import argparse
 import time
 
-from video import VideoRecorder
+#from video import VideoRecorder
 from CDARL.representation.VAE.vae import Encoder
 from CDARL.representation.CYCLEVAE.cycle_vae import EncoderD
-from CDARL.utils import seed_everything, Results, ReplayBuffer, random_shift, random_crop, random_conv, transform, create_logs, cat, RandomTransform
+from CDARL.utils import seed_everything, RandomTransform
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
 from CDARL.representation.ILCM.model import ImageEncoder, ImageDecoder, CoordConv2d, GaussianEncoder, Encoder3dshapes, Decoder3dshapes
 
@@ -59,9 +59,9 @@ class Env():
         if self.causal:
             self.causal = self.causal.to(self.device)
         if self.encoder:
-            self.observation_space = spaces.Box(low=-1000, high=1000, shape=(args.latent_size*self.img_stack,), dtype=np.float)
+            self.observation_space = spaces.Box(low=-1000, high=1000, shape=(args.latent_size*self.img_stack,), dtype=np.float64)
         else:
-            self.observation_space = spaces.Box(low=0, high=255, shape=(3*self.img_stack,64,64), dtype=np.float)
+            self.observation_space = spaces.Box(low=0, high=255, shape=(3*self.img_stack,64,64), dtype=np.float64)
         self.action_space = self.env.action_space
 
     def process_state(self, obs, color, crop, domain):
@@ -341,24 +341,18 @@ class Agent(nn.Module):
                 action = probs.sample()
                 action = action.squeeze().cpu().numpy()
                 action[0] = action[0]*2-1
-        return action #, probs.log_prob(action).sum(dim=1), probs.entropy().sum(1), self.critic(hidden)
-
-# TO DO : train an agent without any the encoder representation (on one domain) and evaluate on multiple domains 
-        # train an agent with my representation (just content) and evaluate on multiple domains (unseen and seen)
-        # train an agent with desentangle representation (so content and style) and evalutate on same domains 
-
-        # Then assess wether it is better to learn an invariant representation or desentangle representation for domain adaptation (2 vs 3)
-        # or even if learning those representation help for domain adaptation (1 vs 2 and 3)
+        return action 
 
 ########### Do Evaluation #################
 def main():
+    seed_everything(args.seed)
     warnings.filterwarnings("ignore")
     video_dir = os.path.join(args.work_dir, 'video')
-    video = VideoRecorder(video_dir if args.save_video else None)
+    #video = VideoRecorder(video_dir if args.save_video else None)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # env setup
+    # env setup
     encoder = None
     main = None
     train_encoder = False
@@ -372,7 +366,6 @@ def main():
             encoder.load_state_dict(weights)
         elif args.repr == 'ilcm':
             print('causal')
-            latent_size = 16
             encoder = create_model_reduce_dim()
             main = create_ilcm()
             # saved checkpoints could contain extra weights such as linear_logsigma 

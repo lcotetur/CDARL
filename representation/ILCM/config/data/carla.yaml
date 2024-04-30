@@ -1,8 +1,7 @@
 name: carla
 data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/carla_data'
-data_dir_ilcm: '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-04-06_1'
 save_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla
-encoder_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-04-06_1/model_step_50000.pt
+encoder_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-04-18_1/model_step_50000.pt
 data_tag: 'weather'
 num_splitted: 1
 num_workers: 4
@@ -13,7 +12,7 @@ training:
   shuffle: False
   batchsize: 10
   encoder: conv
-  intervention: 'style'
+  intervention: 'content'
 
 dim_x: [3, 128, 128]
 dim_z: 16

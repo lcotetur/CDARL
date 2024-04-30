@@ -1,9 +1,6 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical, Beta
-from torch.autograd import Function
 from CDARL.utils import reparameterize
 
 

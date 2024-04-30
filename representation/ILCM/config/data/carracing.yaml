@@ -1,6 +1,5 @@
 name: carracing
 data_dir: '/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data'
-data_dir_ilcm: '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-22'
 save_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing
 encoder_path: /home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-22/model_reduce_dim_step_400000.pt
 data_tag: 'car'

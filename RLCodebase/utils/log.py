@@ -2,6 +2,7 @@ import numpy as np
 import os
 from collections import deque
 import json
+import matplotlib.pyplot as plt
 
 class LoggerTensorboard:
     def __init__(self, writer, num_echo_episodes, episodes_avg_window = -1):
@@ -48,7 +49,7 @@ class LoggerTensorboard:
 
 class Logger:
     def __init__(self, save_path, num_echo_episodes, episodes_avg_window = -1):
-        self.writer = {'done step': [], 'action_loss': [], 'value_loss': [], 'entropy': [], 'episode': [], 'episodic_return': [], 'eval_returns': []}
+        self.writer = {'done step': [], 'episode': [], 'episodic_return': [], 'running average': [], 'eval_returns': [], 'action_loss': [], 'value_loss': [], 'entropy': []}
         self.save_path = save_path
         assert(num_echo_episodes >= 0)
         self.last_rewards = deque(maxlen=num_echo_episodes)
@@ -63,17 +64,21 @@ class Logger:
                 # save each episode return or save average episodic return in windows
                 if self.episodes_avg_window == -1:
                     if self.writer is not None:
+                        running_average = 0.99 * np.mean(self.writer['episodic_return']) + 0.01 * np.mean(info['episodic_return'])
                         self.writer['episodic_return'].append(info['episodic_return'])
+                        self.writer['running average'].append(running_average)
                         self.writer['done step'].append(done_steps+i)
-                        self.writer['episode'].append(len(self.last_rewards))
+                        self.writer['episode'].append(len(self.writer['episode']) + 1)
                 else:
                     if global_step < self.window_end:
                         self.window_rewards.append(info['episodic_return']) 
                     else:
                         if self.writer is not None and len(self.window_rewards) != 0:
+                            running_average = 0.99 * np.mean(self.writer['episodic_return']) + 0.01 * np.mean(self.window_rewards)
                             self.writer['episodic_return'].append(np.mean(self.window_rewards))
+                            self.writer['running average'].append(running_average)
                             self.writer['done step'].append(self.window_end)
-                            self.writer['episode'].append(len(self.last_rewards))
+                            self.writer['episode'].append(len(self.writer['episode']) + 1)
                         self.window_rewards = [info['episodic_return']]
                         self.window_end = (global_step // self.episodes_avg_window + 1) * self.episodes_avg_window
                 self.last_rewards.append(info['episodic_return'])
@@ -88,11 +93,20 @@ class Logger:
         for (i, tag) in enumerate(tags):
             if values[i] is not None:
                 self.writer[tag].append(values[i])
-                self.writer[tag].append(step if isinstance(step, int) else step[i])
 
     def save_logs(self):
         with open(os.path.join(self.save_path, "logs.json"), 'w') as f:
             json.dump(self.writer, f, indent=2)
+
+    def save_plot(self):
+        """ Generate plot according to log 
+        """
+        fig, ax = plt.subplots()
+        ax.plot(self.writer['episode'],self.writer['running average'], label="Moving averaged episode reward")
+        ax.set_xlabel('episode')
+        ax.set_ylabel('running average')
+        fig.suptitle("Moving averaged episode reward")
+        fig.savefig(os.path.join(self.save_path, 'running_average.png'))
 
 class MultiDeque:
     def __init__(self, tags = None):

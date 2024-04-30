@@ -7,32 +7,27 @@ import carla
 import numpy as np
 import argparse
 import os
-import random 
-from torchvision.utils import save_image
-import rlcodebase
-from rlcodebase.agent import PPOAgent
-from rlcodebase.utils import Config, Logger
-#from torch.utils.tensorboard import SummaryWriter
-from CDARL.utils import seed_everything, create_logs 
+from CDARL.utils import seed_everything
 from CDARL.model import CarlaLatentPolicy, CarlaImgPolicy
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
 from CDARL.representation.ILCM.model import ImageEncoderCarla, ImageDecoderCarla, CoordConv2d, GaussianEncoder, BasicEncoderCarla, BasicDecoderCarla
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--weather', default=1, type=int)
+parser.add_argument('--weather', default=0, type=int)
 parser.add_argument('--action-repeat', default=1, type=int)
-parser.add_argument('--algo', default='ilcm', type=str)
-parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/carla_logs/ilcm/2024-03-22_0/200000-model.pt', type=str)
+parser.add_argument('--algo', default='ppo', type=str)
+parser.add_argument('--model-path', default='/home/mila/l/lea.cote-turcotte/CDARL/carla_logs/ppo/2024-04-01_1', type=str)
+parser.add_argument('--model-step', default='200000-model.pt', type=str)
 parser.add_argument('--use-encoder', default=True, action='store_true')
-parser.add_argument('--encoder-path', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_1/model.pt", type=str) 
-parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_ilcm/model.pt', type=str)
+parser.add_argument('--encoder-path', default="/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carla/2024-01-24/encoder_vae.pt", type=str) 
+parser.add_argument('--ilcm-path', default='/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-04-03_ilcm/model_step_120000.pt', type=str)
 parser.add_argument('--ilcm-encoder', default='conv', type=str)
-parser.add_argument('--latent_size', default=10, type=int, help='dimension of latent state embedding')
+parser.add_argument('--latent-size', default=10, type=int, help='dimension of latent state embedding')
 parser.add_argument('--reduce_dim_latent_size', default=16, type=int)
-parser.add_argument('--port', default=2000, type=int)
+parser.add_argument('--port', default=4000, type=int)
 parser.add_argument('--num-eval', default=20, type=int)
 parser.add_argument('--save-path', default='/home/mila/l/lea.cote-turcotte/CDARL/results/carla', type=str)
-parser.add_argument('--seed', default=1, type=int)
+parser.add_argument('--seed', default=2, type=int)
 parser.add_argument('--save-obs', default=False, action='store_true')
 parser.add_argument('--save-obs-path', default='./obs', type=str)
 parser.add_argument('--save_video', default=True, action='store_true')
@@ -132,7 +127,6 @@ class VecGymCarla:
         else:
             obs = np.transpose(s['camera'], (2,0,1))
             obs = np.expand_dims(obs, axis=0)
-            save_image(torch.tensor(obs)/255, os.path.join('/home/mila/l/lea.cote-turcotte/CDARL/checkimages', "domain_carla_%s.png" % args.weather))
             obs = torch.from_numpy(obs).float().to(self.device)
             if args.algo == 'cycle_vae' or args.algo == 'vae' or args.algo == 'adagvae':
                 with torch.no_grad():
@@ -373,7 +367,6 @@ def main():
             encoder.load_state_dict(weights)
         elif args.algo == 'ilcm':
             print('causal')
-            latent_size = 16
             encoder = create_model_reduce_dim()
             main = create_ilcm()
             # saved checkpoints could contain extra weights such as linear_logsigma 
@@ -407,14 +400,15 @@ def main():
 
     # prepare model
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    policy_path = os.path.join(args.model_path, args.model_step)
     if args.use_encoder:
         Model = CarlaLatentPolicy
         input_dim = args.latent_size+1#args.latent_size+1  # 16+1 in paper
     else:
         Model = CarlaImgPolicy
-        input_dim = args.latent_size+1  # 128+1 in paper (16 is too small)
+        input_dim = 128+1 
     model = Model(input_dim, 2)
-    model.load_state_dict(torch.load(args.model_path, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(policy_path, map_location=torch.device('cpu')))
     model = model.to(device)
 
     res = []
@@ -427,7 +421,7 @@ def main():
                 res.append(i['episodic_return'])
 
     print("Average Score", np.mean(res))
-    with open(os.path.join(args.save_path, 'weather_%s_results_%s.txt' % (args.weather, args.algo)), 'w') as f:
+    with open(os.path.join(args.model_path, 'weather_%s_results_%s_.txt' % (args.weather, args.algo)), 'w') as f:
         f.write('score = %s\n' % res)
         f.write('mean_scores = %s\n' % np.mean(res))
         f.write('model = %s\n' % args.model_path)

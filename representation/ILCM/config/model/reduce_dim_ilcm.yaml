@@ -4,7 +4,7 @@ dim_z: 16
 overwrite_latents: false
 
 averaging_strategy: stochastic
-load: '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-21_1/model.pt'
+load: None
 
 scm:
   type: mlp

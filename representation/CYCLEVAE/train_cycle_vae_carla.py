@@ -1,19 +1,16 @@
 import torch
 from torch import optim
-from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
-
-import numpy as np
 import argparse
 from datetime import date
 import json
 import os
 
-from CDARL.utils import reparameterize, seed_everything, updateloader
+from CDARL.utils import seed_everything, updateloader
 from CDARL.utils import ExpDataset, RandomTransform
-from cycle_vae import CarlaDisentangledVAE, forward_loss, backward_loss, vae_loss
+from cycle_vae import CarlaDisentangledVAE, forward_loss, backward_loss
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carla_data', type=str, help='path to the data')

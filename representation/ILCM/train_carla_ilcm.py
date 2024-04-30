@@ -4,33 +4,24 @@
 
 import hydra
 import torch
-from torch.utils.data import TensorDataset, Dataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader
 from torchvision import transforms
-import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import trange
 from pathlib import Path
 from collections import defaultdict
 from omegaconf import OmegaConf
 from functools import lru_cache
-from PIL import Image
-from io import BytesIO
 import json
 from datetime import date
 import os
 import yaml
 
-from CDARL.data.shapes3d_data import Shape3dDataset
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
-from torchvision.utils import save_image
-
+from CDARL.utils import ExpDataset, RandomTransform, Results, seed_everything
 from experiment_utils import (
-    initialize_experiment,
     save_model,
     logger,
     create_optimizer_and_scheduler,
     set_manifold_thickness,
-    compute_metrics_on_dataset,
     reset_optimizer_state,
     update_dict,
     optimizer_step,
@@ -134,7 +125,7 @@ def create_img_encoder_decoder(cfg):
                 )
     return encoder, decoder
 
-@hydra.main(version_base=None, config_path="config", config_name="ilcm_carla")
+@hydra.main(version_base=None, config_path="config", config_name="ilcm")
 def main(cfg):
     """High-level experiment function"""
     log_dir = os.path.join(cfg.data.save_path, str(date.today()) + '_ilcm')
@@ -344,21 +335,14 @@ def train(cfg, model, model_reduce_dim, results, log_dir):
                     save_model(log_dir, model, f"model_step_{step}.pt")
                     results.update_logs(["training_step", "loss", "train_lr"], [step, loss.item(), scheduler.get_last_lr()[0]])
                     results.save_logs(cfg.data.save_path, str(date.today()))
-                        #imgs1 = x1
-                        #with torch.no_grad():
-                            #recon1 = model_reduce_dim.encode_decode(imgs1)
-                        #saved_imgs = torch.cat([imgs1, recon1], dim=0)
-                        # save images
-                        #path_image = os.path.join(log_dir, f'recon_{step}.png')
-                        #save_image(saved_imgs, path_image, nrow=10)
-                        # save metrics
+                    # save metrics
                     update_dict(train_metrics, metrics)
                     with open(os.path.join(log_dir, 'metrics.json'), 'w') as f:
                         json.dump(train_metrics, f)
 
             updateloader(cfg, loader, dataset)
 
-            # LR scheduler
+        # LR scheduler
         if scheduler is not None and epoch < cfg.data.training.epochs - 1:
             scheduler.step()
 
@@ -392,29 +376,14 @@ def get_dataloader(cfg, dataset):
     logger.debug(f"Finished loading data {cfg.data.name}")
     return loader
 
-def get_dataloader_test(cfg, tag, batchsize=None, shuffle=False, include_noise_encodings=False):
-    """Load data from disk and return DataLoader instance"""
-    filename = Path(cfg.data.data_dir_ilcm) / f"{tag}_carla_encoded.pt"
-    data = torch.load(filename)
-    dataset = TensorDataset(*data)
-    dataloader = DataLoader(dataset, batch_size=batchsize, shuffle=shuffle)
-
-    return dataloader
-
 def updateloader(cfg, loader, dataset):
     dataset.loadnext()
     loader = DataLoader(dataset, batch_size=cfg.data.training.batchsize, shuffle=cfg.data.training.shuffle, num_workers=cfg.training.num_workers)
     return loader
 
 def encode_data(cfg, imgs, model_reduce_dim, device):
-    #imgs = imgs.reshape(-1, *imgs.shape[2:])
-    #imgs_repeat = imgs.repeat(2, 1, 1, 1)
-    #imgs = imgs_repeat # torch.Size([30, 3, 64, 64])
-    #m = int(imgs.shape[0]/2)
-    #x1 = imgs[:m, :, :, :]
-    #x2 = imgs[m:, :, :, :]
-
     imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
+    
     if cfg.data.training.intervention == 'style':
         imgs = imgs.reshape(-1, *imgs.shape[2:])
         imgs = imgs.repeat(2, 1, 1, 1)
@@ -434,21 +403,7 @@ def encode_data(cfg, imgs, model_reduce_dim, device):
 
         x0 = imgs_content1
         x1 = imgs_content2
-
-    '''
-    # Style
-    imgs_style = imgs.repeat(2, 1, 1, 1, 1)
-    n = int(imgs_style.shape[0]/2)
-    imgs_style1 = imgs_style[:n, :, :, :, :]
-    imgs_style2 = imgs_style[n:, :, :, :, :]
-    idx = torch.randperm(3)
-    imgs_style1 = imgs_style1[idx].view(imgs_style1.size())
-    imgs_style1= imgs_style1.reshape(-1, *imgs_style1.shape[2:])
-    imgs_style2= imgs_style2.reshape(-1, *imgs_style2.shape[2:])
-
-    x1 = torch.cat((imgs_style1, imgs_content1), dim=0)
-    x2 = torch.cat((imgs_style2, imgs_content2), dim=0)
-    '''
+        
     x0, x1 = (x0.to(device), x1.to(device))
     with torch.no_grad():
         _, _, z0, z1, *_ = model_reduce_dim.encode_decode_pair(x0, x1)

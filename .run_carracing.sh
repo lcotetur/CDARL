@@ -9,11 +9,11 @@ echo "Date:     $(date)"
 echo "Hostname: $(hostname)"
 
 sbatch --gres=gpu:1 -c 4 --mem=48G -t 120:00:00 --partition=main --constraint=turing train_agents.sh
-sbatch --gres=gpu:1 -c 4 --mem=32G -t 30:00:00 --partition=main --constraint=turing evaluate_agents.sh
-sbatch --gres=gpu:1 -c 4 --mem=32G -t 30:00:00 --partition=long --constraint=turing evaluate_3dshapes.sh
-sbatch --gres=gpu:1 -c 4 --mem=32G -t 120:00:00 --partition=long --constraint=turing train_carla_repr.sh
+sbatch --gres=gpu:1 -c 4 --mem=32G -t 24:00:00 --partition=long --constraint=turing evaluate_agents.sh
+sbatch --gres=gpu:1 -c 4 --mem=32G -t 120:00:00 --partition=main --constraint=turing evaluate_carla.sh
+sbatch --gres=gpu:1 -c 4 --mem=32G -t 120:00:00 --partition=long --constraint=turing train_agents_carla.sh
 sbatch --gres=gpu:1 -c 4 -t 120:00:00 --partition=long --constraint=turing train_carracing_repr_ilcm.sh
-sbatch --gres=gpu:1 -c 4 -t 120:00:00 --partition=long --constraint=turing train_carracing_repr.sh
+sbatch --gres=gpu:2 -c 4 -t 120:00:00 --partition=long --constraint=turing train_carracing_repr.sh
 sbatch --gres=gpu:2 -c 4 --mem=40G -t 120:00:00 --partition=long --constraint=turing train_3dshapes.sh
 
 # LUSR CONDA ENV
@@ -21,16 +21,14 @@ salloc --gres=gpu:1 -c 4 --mem=32G -t 32:00:00 --partition=unkillable --constrai
 
 module load anaconda/3 
 
-#module load singularity
+conda activate cdarl
 
-conda activate LUSR
-
-# canvas display
+# canvas display and look for all path
 export PYTHONPATH="${PYTHONPATH}:`pwd`"
 Xvfb :1 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &> xvfb.log & export DISPLAY=:1
 
 # ray connection - only if running main_carracing
-ray start --head --num-cpus=4 --object-store-memory=10000000000 --memory=20000000000
+#ray start --head --num-cpus=4 --object-store-memory=10000000000 --memory=20000000000
 
 # train cycle-vae for carracing games
 python train_cycle_vae.py --random-augmentations True

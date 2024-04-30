@@ -4,34 +4,25 @@
 
 import hydra
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torchvision import transforms
-import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import trange
 from pathlib import Path
 from collections import defaultdict
 from omegaconf import OmegaConf
-from PIL import Image
-from io import BytesIO
+from torchvision.utils import save_image
 from datetime import date
 import yaml
 import json
 import os
 
-from CDARL.data.shapes3d_data import Shape3dDataset
-from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
-from torchvision.utils import save_image
-
+from CDARL.utils import ExpDataset, RandomTransform, Results, seed_everything
 from experiment_utils import (
-    initialize_experiment,
     save_model,
     logger,
     create_optimizer_and_scheduler,
     set_manifold_thickness,
-    compute_metrics_on_dataset,
     reset_optimizer_state,
-    update_dict,
     optimizer_step,
     step_schedules,
     determine_graph_learning_settings,
@@ -59,8 +50,7 @@ def main(cfg):
     model = create_model(cfg)
     load_checkpoint(cfg, model)
     train(cfg, model, results, log_dir)
-    #save_model(log_dir, model)
-    #save_representations(cfg, log_dir, model)
+    save_model(log_dir, model)
 
     # Save results
     results.save_logs(cfg.data.save_path, str(date.today()))
@@ -352,72 +342,6 @@ def train(cfg, model, results, log_dir):
     set_manifold_thickness(cfg, model, None)
 
     return train_metrics
-
-@torch.no_grad()
-def save_representations(cfg, log_dir, model):
-    """Reduces dimensionality for full dataset by pushing images through encoder"""
-    print("Encoding full datasets and storing representations")
-
-    device = torch.device(cfg.training.device)
-    model.to(device)
-
-    for partition in ["train", "test", "val"]:
-        transform = transforms.Compose([transforms.ToTensor()])
-        if partition == 'train':
-            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
-            dataloader = get_dataloader(cfg, dataset)
-        elif partition == 'test':
-            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
-            dataloader = get_dataloader(cfg, dataset)
-        elif partition == 'val':
-            dataset = ExpDataset(cfg.data.data_dir, cfg.data.data_tag, cfg.data.num_splitted, transform)
-            dataloader = get_dataloader(cfg, dataset)
-
-        z0s, z1s = [], []
-
-        for i_split in range(cfg.data.num_splitted):
-            for imgs in dataloader:
-                imgs = imgs.permute(1,0,2,3,4).to(device, non_blocking=True)
-                if cfg.data.training.intervention == 'style':
-                    imgs = imgs[0:3, :, :, :, :]
-                    imgs = imgs.reshape(-1, *imgs.shape[2:])
-                    imgs = imgs.repeat(2, 1, 1, 1)
-                    imgs = RandomTransform(imgs).apply_transformations(nb_class=2, value=[0, -0.1])
-                    x0 = imgs[0]
-                    x1 = imgs[1]
-                if cfg.data.training.intervention == 'content':
-                    imgs_content = imgs.permute(1,0,2,3,4).repeat(2, 1, 1, 1, 1)
-                    m = int(imgs_content.shape[0]/2)
-                    imgs_content1 = imgs_content[:m, :, :, :, :]
-                    imgs_content2 = imgs_content[:m, :, :, :, :]
-                    imgs_content1 = imgs_content1[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]].view(imgs_content1.size())
-                    imgs_content2 = imgs_content2[[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]].view(imgs_content2.size())
-
-                    imgs_content1 = imgs_content1.reshape(-1, *imgs_content1.shape[2:])
-                    imgs_content2 = imgs_content2.reshape(-1, *imgs_content2.shape[2:])
-
-                    x0 = imgs_content1
-                    x1 = imgs_content2
-
-                x0, x1 = x0.to(device), x1.to(device)
-
-                _, _, z0, z1, *_ = model.encode_decode_pair(x0, x1)
-
-                z0s.append(z0)
-                z1s.append(z1)
-
-        z0s = torch.cat(z0s, dim=0)
-        z1s = torch.cat(z1s, dim=0)
-
-        data = (
-            z0s,
-            z1s,
-        )
-
-        filename = Path(log_dir).resolve() / f"{partition}_carla_encoded.pt"
-        logger.info(f"Storing encoded {partition} data at {filename}")
-        torch.save(data, filename)
-
 
 def get_dataloader(cfg, dataset):
     """Load data from disk and return DataLoader instance"""

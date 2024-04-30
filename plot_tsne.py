@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from sklearn import manifold
-from CDARL.data.shapes3d_data import Shape3dDataset
+#from CDARL.data.shapes3d_data import Shape3dDataset
 import warnings 
 from CDARL.utils import ExpDataset, reparameterize, RandomTransform, Results, seed_everything
 from CDARL.representation.ILCM.model import MLPImplicitSCM, HeuristicInterventionEncoder, ILCM
@@ -22,9 +22,9 @@ import argparse
 import copy
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--algo', default='adagvae', type=str)
+parser.add_argument('--algo', default='ilcm', type=str)
 parser.add_argument('--data', default='carracing', type=str)
-parser.add_argument('--seed', default=1, type=int)
+parser.add_argument('--seed', default=2, type=int)
 parser.add_argument('--ilcm_encoder_type', default='conv', type=str)
 parser.add_argument('--data-dir-carracing', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carracing_data', type=str, help='path to the data')
 parser.add_argument('--data-dir-carla', default='/home/mila/l/lea.cote-turcotte/CDARL/data/carla_data', type=str, help='path to the data')
@@ -32,6 +32,8 @@ parser.add_argument('--data-tag', default='car', type=str, help='files with data
 parser.add_argument('--num-splitted', default=10, type=int, help='number of files that the states from one domain are splitted into')
 parser.add_argument('--save-path', default="/home/mila/l/lea.cote-turcotte/CDARL/checkimages", type=str)
 parser.add_argument('--batch-size', default=120, type=int)
+parser.add_argument('--latent-size', default=10, type=int, help='dimension of latent state embedding')
+parser.add_argument('--reduce_dim_latent_size', default=16, type=int)
 parser.add_argument('--num-workers', default=4, type=int)
 args = parser.parse_args()
 
@@ -47,7 +49,7 @@ def create_model_reduce_dim():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=16,
+            dim_z=args.reduce_dim_latent_size,
             )
     return model
 
@@ -58,7 +60,7 @@ def create_img_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=16,
+            dim_z=args.reduce_dim_latent_size,
             min_std=0.2,
         )
 
@@ -100,7 +102,7 @@ def create_img_encoder_decoder():
             encoder = Encoder3dshapes(
                         in_resolution=64,
                         in_features=3,
-                        out_features=16,
+                        out_features=args.reduce_dim_latent_size,
                         hidden_features=32,
                         batchnorm=False,
                         conv_class=CoordConv2d,
@@ -112,7 +114,7 @@ def create_img_encoder_decoder():
                         permutation=0,
                         )
             decoder = Decoder3dshapes(
-                        in_features=16,
+                        in_features=args.reduce_dim_latent_size,
                         out_resolution=64,
                         out_features=3,
                         hidden_features=32,
@@ -162,7 +164,7 @@ def create_img_encoder_decoder():
             encoder = BasicEncoderCarla(
                     in_resolution=128,
                     in_features=3,
-                    out_features=8,
+                    out_features=args.reduce_dim_latent_size,
                     hidden_features=32,
                     batchnorm=False,
                     conv_class=CoordConv2d,
@@ -174,7 +176,7 @@ def create_img_encoder_decoder():
                     permutation=0,
                     )
             decoder = BasicDecoderCarla(
-                    in_features=8,
+                    in_features=args.reduce_dim_latent_size,
                     out_resolution=128,
                     out_features=3,
                     hidden_features=32,
@@ -203,7 +205,7 @@ def create_ilcm():
             intervention_encoder=intervention_encoder,
             intervention_prior=None,
             averaging_strategy='stochastic',
-            dim_z=10,
+            dim_z=args.latent_size,
             )
 
     return model
@@ -222,16 +224,16 @@ def create_mlp_encoder_decoder():
 
     encoder = GaussianEncoder(
                 hidden=encoder_hidden,
-                input_features=16,
-                output_features=10,
+                input_features=args.reduce_dim_latent_size,
+                output_features=args.latent_size,
                 fix_std=False,
                 init_std=0.01,
                 min_std=0.0001,
             )
     decoder = GaussianEncoder(
                 hidden=decoder_hidden,
-                input_features=10,
-                output_features=16,
+                input_features=args.latent_size,
+                output_features=args.reduce_dim_latent_size,
                 fix_std=True,
                 init_std=1.0,
                 min_std=0.001,
@@ -248,7 +250,7 @@ def create_scm():
             hidden_units=100,
             hidden_layers=2,
             homoskedastic=False,
-            dim_z=10,
+            dim_z=args.latent_size,
             min_std=0.2,
         )
     return scm
@@ -474,6 +476,7 @@ def tsne(tsne, labels, save_path, model_name, data=args.data):
  
     # finally, show the plot
     fig.savefig(os.path.join(save_path, model_name))
+    plt.close(fig)
 
 # Saliency Map
 normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -584,6 +587,7 @@ def saliency_map(X, encoders, algos=['vae', 'cycle_vae', 'adagvae', 'ilcm'], dat
         plt.title(key, size=30)
         i = i+1
     fig.savefig(os.path.join(save_path, 'Saliency map'))
+    plt.close(fig)
 
 
 if __name__ == "__main__":
@@ -596,14 +600,14 @@ if __name__ == "__main__":
                 'vae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carracing/2024-02-27/encoder_vae_stack.pt', #'/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carracing/2023-11-20/encoder_vae.pt',
                 'adagvae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carracing/2024-03-07/encoder_adagvae.pt', #/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carracing/2024-02-19/encoder_adagvae.pt', #'/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carracing/2023-11-21/encoder_adagvae.pt',
                 'ilcm': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-26/model_reduce_dim_step_400000.pt', #'/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-02-26/model_reduce_dim_step_330000.pt'
-                'ilcm_causal': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-26_ilcm/model_step_80000_0.pt' } #'/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-02-27/model_step_150000.pt'} #
+                'ilcm_causal': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-03-26_ilcm/model_step_120000_0.pt' } #'/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carracing/2024-02-27/model_step_150000.pt'} #
     #'/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carracing/2024-01-31/encoder_adagvae.pt'
     carla_encoders = {
                 'cycle_vae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/carla/2024-01-24/encoder_cycle_vae.pt',
                 'vae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/VAE/runs/carla/2024-01-24/encoder_vae.pt',
                 'adagvae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ADAGVAE/logs/carla/2024-03-12/encoder_adagvae.pt',
-                'ilcm_causal': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-13_ilcm/model_step_120000.pt',
-                'ilcm': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-03-12_1/model_step_50000.pt'}
+                'ilcm_causal': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-04-14_ilcm/model_step_120000.pt',
+                'ilcm': '/home/mila/l/lea.cote-turcotte/CDARL/representation/ILCM/runs/carla/2024-04-13_1/model_step_50000.pt'}
     shapes3d_encoders = {
                 'cycle_vae style': '/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/3dshapes/2024-02-26/encoder.pt',
                 'cycle_vae': '/home/mila/l/lea.cote-turcotte/CDARL/representation/CYCLEVAE/runs/3dshapes/2024-02-26/encoder.pt',
@@ -898,19 +902,19 @@ if __name__ == "__main__":
                         'orientation', 'orientation', 'orientation', 'orientation', 'orientation']
     
     if args.data == 'carracing':
-        #t_sne = computeTSNEProjectionOfLatentSpace(imgs_carracing, carracing_encoders[args.algo], algo=args.algo, data='carracing', ilcm_path=carracing_encoders['ilcm_causal'])
-        #tsne(t_sne, carracing_labels, save_path, 't-SNE %s latents carracing' % args.algo, data='carracing')
+        t_sne = computeTSNEProjectionOfLatentSpace(imgs_carracing, carracing_encoders[args.algo], algo=args.algo, data='carracing', ilcm_path=carracing_encoders['ilcm_causal'])
+        tsne(t_sne, carracing_labels, save_path, 't-SNE %s latents carracing' % args.algo, data='carracing')
         saliency_map(imgs_carracing[0].unsqueeze(0), carracing_encoders, ilcm_path=carracing_encoders['ilcm_causal'])
     elif args.data == 'carla':
-        #t_sne = computeTSNEProjectionOfLatentSpace(imgs_carla, carla_encoders[args.algo], algo=args.algo, data='carla', ilcm_path=carla_encoders['ilcm_causal'])
-        #tsne(t_sne, carla_labels, save_path, 't-SNE %s latents carla' % args.algo, data='carla')
+        t_sne = computeTSNEProjectionOfLatentSpace(imgs_carla, carla_encoders[args.algo], algo=args.algo, data='carla', ilcm_path=carla_encoders['ilcm_causal'])
+        tsne(t_sne, carla_labels, save_path, 't-SNE %s latents carla' % args.algo, data='carla')
         saliency_map(imgs_carla[0].unsqueeze(0), carla_encoders, ilcm_path=carla_encoders['ilcm_causal'])
-    elif args.data == '3dshapes':
+    #elif args.data == '3dshapes':
         #shapes3d data
-        dataset3dshapes = Shape3dDataset()
-        dataset3dshapes.load_dataset(file_dir='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5')
-        imgs1 = dataset3dshapes.create_weak_vae_batch(2, 'cpu', k=1)
-        saliency_map(imgs1[0].unsqueeze(0)[:, :, :64, :], shapes3d_encoders, ilcm_path=shapes3d_encoders['ilcm_causal'])
+        #dataset3dshapes = Shape3dDataset()
+        #dataset3dshapes.load_dataset(file_dir='/home/mila/l/lea.cote-turcotte/CDARL/data/3dshapes.h5')
+        #imgs1 = dataset3dshapes.create_weak_vae_batch(2, 'cpu', k=1)
+        #saliency_map(imgs1[0].unsqueeze(0)[:, :, :64, :], shapes3d_encoders, ilcm_path=shapes3d_encoders['ilcm_causal'])
         #imgs2 = dataset3dshapes.create_batch_plot()
         #imgs2 = imgs2.reshape(-1, *imgs2.shape[2:])
         #save_image(imgs2, os.path.join(save_path ,'tsne_3dshapes.png'))
